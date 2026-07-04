@@ -50,7 +50,8 @@ var NOTE_TEMPLATE_KEYS = [
   ...FILENAME_TEMPLATE_KEYS,
   "transcript",
   "audioPath",
-  "audioEmbed"
+  "audioEmbed",
+  "originalTranscript"
 ];
 function createTemplateContext(date) {
   const pad = (value) => String(value).padStart(2, "0");
@@ -241,7 +242,7 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
     });
     if (this.plugin.settings.useTemplate) {
       new import_obsidian2.Setting(containerEl).setName("Note template file").setDesc(
-        "Vault path to a Markdown note used as the template, like Templates/Transcription.md. Supports {{transcript}}, {{audioPath}}, {{audioEmbed}}, and the date and time placeholders."
+        "Vault path to a Markdown note used as the template, like Templates/Transcription.md. Supports {{transcript}}, {{audioPath}}, {{audioEmbed}}, {{originalTranscript}}, and the date and time placeholders."
       ).addText((text) => {
         text.setPlaceholder("Templates/Transcription.md").setValue(this.plugin.settings.noteTemplatePath).onChange(async (value) => {
           this.plugin.settings.noteTemplatePath = value.trim() ? (0, import_obsidian2.normalizePath)(value.trim()) : "";
@@ -251,7 +252,7 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
     }
     new import_obsidian2.Setting(containerEl).setName("Transcript processing").setHeading();
     new import_obsidian2.Setting(containerEl).setName("Clean up transcript with AI").setDesc(
-      "Send the raw transcript to a Groq language model to fix punctuation, remove filler words, and add paragraph breaks. Skipped when timestamped segments are enabled, so segment text stays aligned with the audio."
+      'Send the raw transcript to a Groq language model to fix punctuation, remove filler words, and add paragraph breaks. The original transcript is kept too, under an "Original transcript" heading in the note. Skipped when timestamped segments are enabled, so segment text stays aligned with the audio.'
     ).addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.cleanupTranscript).onChange(async (value) => {
         this.plugin.settings.cleanupTranscript = value;
@@ -306,7 +307,8 @@ var MIME_CANDIDATES = [
   { mime: "audio/ogg", extension: "ogg" }
 ];
 var SILENCE_RMS_THRESHOLD = 0.01;
-var SILENCE_WINDOW_MS = 5e3;
+var SILENCE_WARNING_MS = 5e3;
+var SILENCE_AUTO_STOP_MS = 6e4;
 var SILENCE_POLL_MS = 250;
 var RecorderController = class {
   constructor(handlers) {
@@ -457,7 +459,9 @@ var RecorderController = class {
       return;
     }
     const data = new Uint8Array(analyser.fftSize);
-    const watchStartedAt = Date.now();
+    let hasHeardSound = false;
+    let silenceStartedAt = Date.now();
+    let earlyWarningShown = false;
     this.silenceInterval = window.setInterval(() => {
       var _a;
       if (((_a = this.audioContext) == null ? void 0 : _a.state) !== "running") {
@@ -471,12 +475,22 @@ var RecorderController = class {
       }
       const rms = Math.sqrt(sum / data.length);
       if (rms > SILENCE_RMS_THRESHOLD) {
-        this.stopSilenceWatch();
+        hasHeardSound = true;
+        silenceStartedAt = null;
         return;
       }
-      if (Date.now() - watchStartedAt >= SILENCE_WINDOW_MS) {
-        this.stopSilenceWatch();
+      if (silenceStartedAt === null) {
+        silenceStartedAt = Date.now();
+      }
+      const silenceElapsed = Date.now() - silenceStartedAt;
+      if (!hasHeardSound && !earlyWarningShown && silenceElapsed >= SILENCE_WARNING_MS) {
+        earlyWarningShown = true;
         new import_obsidian3.Notice("No audio detected from your microphone. Check your input device.");
+      }
+      if (silenceElapsed >= SILENCE_AUTO_STOP_MS) {
+        this.stopSilenceWatch();
+        new import_obsidian3.Notice("No audio detected for over a minute \u2014 stopping the recording automatically to save battery.");
+        this.stop();
       }
     }, SILENCE_POLL_MS);
   }
@@ -959,7 +973,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     const notePath = resolveNotePath(this.app, this.settings, noteFileName);
     const audioBuffer = await result.blob.arrayBuffer();
     const savedAudioPath = await writeBinaryUnique(this.app, audioPath, `.${result.extension}`, audioBuffer);
-    let transcriptText = "";
+    let rawTranscript = "";
     let segments = [];
     let transcriptionFailed = false;
     const apiKey = this.getApiKey();
@@ -974,27 +988,30 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
         fileName: audioFileName,
         wantSegments: this.settings.segmentedTranscript
       });
-      transcriptText = transcription.text.trim();
+      rawTranscript = transcription.text.trim();
       segments = transcription.segments;
     } catch (error) {
       console.error(error);
       transcriptionFailed = true;
-      transcriptText = `Transcription failed: ${error.message || error}`;
+      rawTranscript = `Transcription failed: ${error.message || error}`;
       new import_obsidian6.Notice("Audio saved, but transcription failed.");
     }
     const useSegments = !transcriptionFailed && this.settings.segmentedTranscript && segments.length > 0;
-    if (!transcriptionFailed && this.settings.cleanupTranscript && !useSegments && transcriptText) {
+    let displayTranscript = rawTranscript;
+    let originalTranscript = "";
+    if (!transcriptionFailed && this.settings.cleanupTranscript && !useSegments && rawTranscript) {
       try {
-        transcriptText = await cleanupTranscript(apiKey, transcriptText);
+        displayTranscript = await cleanupTranscript(apiKey, rawTranscript);
+        originalTranscript = rawTranscript;
       } catch (error) {
         console.error(error);
         new import_obsidian6.Notice("Transcript cleanup failed; using the raw transcript.");
       }
     }
-    const transcriptForNote = useSegments ? renderSegmentedTranscript(segments, savedAudioPath) : transcriptText;
-    let noteBody = await this.renderNote(transcriptForNote, savedAudioPath, context);
+    const transcriptForNote = useSegments ? renderSegmentedTranscript(segments, savedAudioPath) : displayTranscript;
+    let noteBody = await this.renderNote(transcriptForNote, savedAudioPath, context, originalTranscript);
     if (!transcriptionFailed) {
-      const warning = transcriptLengthWarning(transcriptText, result.durationSeconds);
+      const warning = transcriptLengthWarning(rawTranscript, result.durationSeconds);
       if (warning) {
         noteBody += warning;
       }
@@ -1006,11 +1023,12 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     }
     new import_obsidian6.Notice("Transcription saved.");
   }
-  async renderNote(transcript, audioPath, context) {
+  async renderNote(transcript, audioPath, context, originalTranscript) {
     const values = Object.assign({}, context, {
       transcript: transcript.trim(),
       audioPath,
-      audioEmbed: `![[${audioPath}]]`
+      audioEmbed: `![[${audioPath}]]`,
+      originalTranscript: originalTranscript.trim()
     });
     if (this.settings.useTemplate && this.settings.noteTemplatePath) {
       const template = await this.readNoteTemplate(this.settings.noteTemplatePath);
@@ -1019,9 +1037,17 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       }
       new import_obsidian6.Notice(`Note template file not found: ${this.settings.noteTemplatePath}. Using the default layout.`);
     }
-    return `${values.transcript}
+    let body = `${values.transcript}
 
 ${values.audioEmbed}`;
+    if (values.originalTranscript) {
+      body += `
+
+## Original transcript
+
+${values.originalTranscript}`;
+    }
+    return body;
   }
   async readNoteTemplate(path) {
     const normalized = (0, import_obsidian6.normalizePath)(path);

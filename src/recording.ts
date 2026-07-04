@@ -15,7 +15,8 @@ const MIME_CANDIDATES: MimeCandidate[] = [
 ];
 
 const SILENCE_RMS_THRESHOLD = 0.01;
-const SILENCE_WINDOW_MS = 5000;
+const SILENCE_WARNING_MS = 5000;
+const SILENCE_AUTO_STOP_MS = 60000;
 const SILENCE_POLL_MS = 250;
 
 export interface RecordingResult {
@@ -205,7 +206,15 @@ export class RecorderController {
     }
 
     const data = new Uint8Array(analyser.fftSize);
-    const watchStartedAt = Date.now();
+
+    // Runs for the whole recording, not just the start: a mic can go silent
+    // mid-recording too (OS-level mute, unplugged capsule, etc). Muting
+    // doesn't fire `devicechange` or drop the device from
+    // `enumerateDevices()` — it's the same device, just producing silence —
+    // so volume analysis is the only reliable way to catch it.
+    let hasHeardSound = false;
+    let silenceStartedAt: number | null = Date.now();
+    let earlyWarningShown = false;
 
     this.silenceInterval = window.setInterval(() => {
       // A suspended context reads as pure silence; don't judge until it runs.
@@ -220,16 +229,28 @@ export class RecorderController {
       }
       const rms = Math.sqrt(sum / data.length);
 
-      // Any sound at all ends the watch; this is only a "did anything
-      // arrive from the mic at the start" check, not a live level meter.
       if (rms > SILENCE_RMS_THRESHOLD) {
-        this.stopSilenceWatch();
+        hasHeardSound = true;
+        silenceStartedAt = null;
         return;
       }
 
-      if (Date.now() - watchStartedAt >= SILENCE_WINDOW_MS) {
-        this.stopSilenceWatch();
+      if (silenceStartedAt === null) {
+        silenceStartedAt = Date.now();
+      }
+      const silenceElapsed = Date.now() - silenceStartedAt;
+
+      // Only warn about "no audio yet" before anything has ever come through —
+      // a normal mid-conversation pause shouldn't trigger a "check your mic" notice.
+      if (!hasHeardSound && !earlyWarningShown && silenceElapsed >= SILENCE_WARNING_MS) {
+        earlyWarningShown = true;
         new Notice("No audio detected from your microphone. Check your input device.");
+      }
+
+      if (silenceElapsed >= SILENCE_AUTO_STOP_MS) {
+        this.stopSilenceWatch();
+        new Notice("No audio detected for over a minute — stopping the recording automatically to save battery.");
+        this.stop();
       }
     }, SILENCE_POLL_MS);
   }

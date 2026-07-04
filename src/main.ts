@@ -216,7 +216,7 @@ export default class FluxTtsPlugin extends Plugin {
     const audioBuffer = await result.blob.arrayBuffer();
     const savedAudioPath = await writeBinaryUnique(this.app, audioPath, `.${result.extension}`, audioBuffer);
 
-    let transcriptText = "";
+    let rawTranscript = "";
     let segments: TranscriptionSegment[] = [];
     let transcriptionFailed = false;
     const apiKey = this.getApiKey();
@@ -232,31 +232,38 @@ export default class FluxTtsPlugin extends Plugin {
         fileName: audioFileName,
         wantSegments: this.settings.segmentedTranscript
       });
-      transcriptText = transcription.text.trim();
+      rawTranscript = transcription.text.trim();
       segments = transcription.segments;
     } catch (error: any) {
       console.error(error);
       transcriptionFailed = true;
-      transcriptText = `Transcription failed: ${error.message || error}`;
+      rawTranscript = `Transcription failed: ${error.message || error}`;
       new Notice("Audio saved, but transcription failed.");
     }
 
     const useSegments = !transcriptionFailed && this.settings.segmentedTranscript && segments.length > 0;
 
-    if (!transcriptionFailed && this.settings.cleanupTranscript && !useSegments && transcriptText) {
+    // originalTranscript stays empty unless cleanup actually ran, so the note
+    // only gets an "Original transcript" section when there's a real raw
+    // version to show alongside the cleaned-up one.
+    let displayTranscript = rawTranscript;
+    let originalTranscript = "";
+
+    if (!transcriptionFailed && this.settings.cleanupTranscript && !useSegments && rawTranscript) {
       try {
-        transcriptText = await cleanupTranscript(apiKey, transcriptText);
+        displayTranscript = await cleanupTranscript(apiKey, rawTranscript);
+        originalTranscript = rawTranscript;
       } catch (error) {
         console.error(error);
         new Notice("Transcript cleanup failed; using the raw transcript.");
       }
     }
 
-    const transcriptForNote = useSegments ? renderSegmentedTranscript(segments, savedAudioPath) : transcriptText;
+    const transcriptForNote = useSegments ? renderSegmentedTranscript(segments, savedAudioPath) : displayTranscript;
 
-    let noteBody = await this.renderNote(transcriptForNote, savedAudioPath, context);
+    let noteBody = await this.renderNote(transcriptForNote, savedAudioPath, context, originalTranscript);
     if (!transcriptionFailed) {
-      const warning = transcriptLengthWarning(transcriptText, result.durationSeconds);
+      const warning = transcriptLengthWarning(rawTranscript, result.durationSeconds);
       if (warning) {
         noteBody += warning;
       }
@@ -271,11 +278,17 @@ export default class FluxTtsPlugin extends Plugin {
     new Notice("Transcription saved.");
   }
 
-  async renderNote(transcript: string, audioPath: string, context: TemplateContext): Promise<string> {
+  async renderNote(
+    transcript: string,
+    audioPath: string,
+    context: TemplateContext,
+    originalTranscript: string
+  ): Promise<string> {
     const values = Object.assign({}, context, {
       transcript: transcript.trim(),
       audioPath,
-      audioEmbed: `![[${audioPath}]]`
+      audioEmbed: `![[${audioPath}]]`,
+      originalTranscript: originalTranscript.trim()
     });
 
     if (this.settings.useTemplate && this.settings.noteTemplatePath) {
@@ -286,7 +299,11 @@ export default class FluxTtsPlugin extends Plugin {
       new Notice(`Note template file not found: ${this.settings.noteTemplatePath}. Using the default layout.`);
     }
 
-    return `${values.transcript}\n\n${values.audioEmbed}`;
+    let body = `${values.transcript}\n\n${values.audioEmbed}`;
+    if (values.originalTranscript) {
+      body += `\n\n## Original transcript\n\n${values.originalTranscript}`;
+    }
+    return body;
   }
 
   private async readNoteTemplate(path: string): Promise<string | null> {

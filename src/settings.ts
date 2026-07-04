@@ -222,8 +222,9 @@ export class FluxTtsSettingTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName("Note template file")
         .setDesc(
-          "Vault path to a Markdown note used as the template, like Templates/Transcription.md. " +
-            "Supports {{transcript}}, {{audioPath}}, {{audioEmbed}}, and the date and time placeholders."
+          "Vault path to a Markdown note used as the template, like Templates/Transcription.md. Supports " +
+            "{{transcript}}, {{audioPath}}, {{audioEmbed}}, {{originalTranscript}}, and the date and time " +
+            "placeholders."
         )
         .addText((text) => {
           text
@@ -242,7 +243,8 @@ export class FluxTtsSettingTab extends PluginSettingTab {
       .setName("Clean up transcript with AI")
       .setDesc(
         "Send the raw transcript to a Groq language model to fix punctuation, remove filler words, " +
-          "and add paragraph breaks. Skipped when timestamped segments are enabled, so segment text stays " +
+          "and add paragraph breaks. The original transcript is kept too, under an \"Original transcript\" " +
+          "heading in the note. Skipped when timestamped segments are enabled, so segment text stays " +
           "aligned with the audio."
       )
       .addToggle((toggle) => {

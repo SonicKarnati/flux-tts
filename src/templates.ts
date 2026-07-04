@@ -16,7 +16,8 @@ export const NOTE_TEMPLATE_KEYS = [
   ...FILENAME_TEMPLATE_KEYS,
   "transcript",
   "audioPath",
-  "audioEmbed"
+  "audioEmbed",
+  "originalTranscript"
 ];
 
 export type TemplateContext = Record<string, string>;
