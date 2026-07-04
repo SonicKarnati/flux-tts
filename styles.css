@@ -1,0 +1,9 @@
+.flux-tts-template-preview {
+  margin-top: var(--size-2-2);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.flux-tts-template-preview.flux-tts-template-invalid {
+  color: var(--text-error);
+}
