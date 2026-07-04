@@ -35,6 +35,8 @@ Flux TTS is an Obsidian plugin that records audio from the ribbon, saves the rec
 
 Audio is saved locally in your vault. Transcription sends the recorded audio to Groq using your API key; if AI cleanup is enabled, the transcript text is also sent to Groq. No other services are used, and nothing is sent anywhere until you record something.
 
+**This plugin requires a free [Groq](https://console.groq.com/keys) account and API key.** Groq's speech-to-text API is the only way this plugin performs transcription, so the plugin has no functionality without one.
+
 ## Development
 
 Source lives in `src/` (TypeScript) and is bundled to `main.js` with esbuild.
