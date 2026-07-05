@@ -13,6 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Shallow clones can turn the pushed annotated tag into a local
+          # lightweight ref, in which case %(contents) below silently
+          # returns the commit message instead of the tag's own message.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
