@@ -49,7 +49,7 @@ npm run build  # type-check + production build
 
 To test locally, copy (or symlink) this folder into `<vault>/.obsidian/plugins/flux-tts/` and enable it in **Settings → Community plugins**. The distributable files are `manifest.json`, `main.js`, `styles.css`, and `versions.json`.
 
-Releases are built by GitHub Actions: pushing a tag that matches the `version` in `manifest.json` creates a draft GitHub release with the distributable files attached.
+Releases are built by GitHub Actions: pushing a tag that matches the `version` in `manifest.json` creates a published GitHub release with the distributable files attached.
 
 ## License
 
