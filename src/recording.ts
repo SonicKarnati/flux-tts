@@ -303,7 +303,7 @@ export class RecorderController {
     }
 
     this.disconnectNotified = true;
-    const fragment = document.createDocumentFragment();
+    const fragment = activeDocument.createDocumentFragment();
     fragment.createSpan({
       text: "Your recording input disconnected — audio after this point may be silent. "
     });

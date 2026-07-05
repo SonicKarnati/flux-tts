@@ -8,13 +8,7 @@ import {
   transcribeAudio,
   transcriptLengthWarning
 } from "./transcription";
-import {
-  createNoteUnique,
-  ensureParentFolder,
-  resolveAudioPath,
-  resolveNotePath,
-  writeBinaryUnique
-} from "./paths";
+import { createNoteUnique, resolveAudioPath, resolveNotePath, writeBinaryUnique } from "./paths";
 import {
   FILENAME_TEMPLATE_KEYS,
   TemplateContext,
@@ -25,6 +19,10 @@ import {
 
 const PLUGIN_ID = "flux-tts";
 const SECRET_KEY = `${PLUGIN_ID}-groq-api-key`;
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 interface SecretStorage {
   getSecret(key: string): string | undefined;
@@ -41,9 +39,9 @@ export default class FluxTtsPlugin extends Plugin {
 
     this.recorder = new RecorderController({
       onFinish: (result) => {
-        this.handleRecordingFinished(result).catch((error) => {
+        this.handleRecordingFinished(result).catch((error: unknown) => {
           console.error(error);
-          new Notice(`Recording failed: ${error.message || error}`);
+          new Notice(`Recording failed: ${getErrorMessage(error)}`);
         });
       },
       onError: (error) => {
@@ -189,9 +187,9 @@ export default class FluxTtsPlugin extends Plugin {
       if (this.recorder.isRecording) {
         new Notice("Recording started.");
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      new Notice(`Could not start recording: ${error.message || error}`);
+      new Notice(`Could not start recording: ${getErrorMessage(error)}`);
     }
   }
 
@@ -234,10 +232,10 @@ export default class FluxTtsPlugin extends Plugin {
       });
       rawTranscript = transcription.text.trim();
       segments = transcription.segments;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
       transcriptionFailed = true;
-      rawTranscript = `Transcription failed: ${error.message || error}`;
+      rawTranscript = `Transcription failed: ${getErrorMessage(error)}`;
       new Notice("Audio saved, but transcription failed.");
     }
 

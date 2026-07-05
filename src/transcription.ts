@@ -160,7 +160,7 @@ interface MultipartPart {
 
 async function buildMultipartBody(boundary: string, parts: MultipartPart[]): Promise<ArrayBuffer> {
   const encoder = new TextEncoder();
-  const buffers: ArrayBuffer[] = [];
+  const chunks: Uint8Array[] = [];
 
   for (const part of parts) {
     let header = `--${boundary}\r\nContent-Disposition: form-data; name="${part.name}"`;
@@ -173,25 +173,23 @@ async function buildMultipartBody(boundary: string, parts: MultipartPart[]): Pro
     }
     header += "\r\n";
 
-    buffers.push(encoder.encode(header).buffer as ArrayBuffer);
-    buffers.push(
-      part.value instanceof ArrayBuffer ? part.value : (encoder.encode(String(part.value)).buffer as ArrayBuffer)
-    );
-    buffers.push(encoder.encode("\r\n").buffer as ArrayBuffer);
+    chunks.push(encoder.encode(header));
+    chunks.push(part.value instanceof ArrayBuffer ? new Uint8Array(part.value) : encoder.encode(String(part.value)));
+    chunks.push(encoder.encode("\r\n"));
   }
 
-  buffers.push(encoder.encode(`--${boundary}--\r\n`).buffer as ArrayBuffer);
-  return concatArrayBuffers(buffers);
+  chunks.push(encoder.encode(`--${boundary}--\r\n`));
+  return concatChunks(chunks);
 }
 
-function concatArrayBuffers(buffers: ArrayBuffer[]): ArrayBuffer {
-  const totalLength = buffers.reduce((total, buffer) => total + buffer.byteLength, 0);
+function concatChunks(chunks: Uint8Array[]): ArrayBuffer {
+  const totalLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
   const output = new Uint8Array(totalLength);
   let offset = 0;
 
-  for (const buffer of buffers) {
-    output.set(new Uint8Array(buffer), offset);
-    offset += buffer.byteLength;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
   }
 
   return output.buffer;

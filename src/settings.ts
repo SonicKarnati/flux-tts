@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting, normalizePath } from "obsidian";
+import { App, PluginSettingTab, Setting, SettingDefinitionItem, normalizePath } from "obsidian";
 import {
   FILENAME_TEMPLATE_KEYS,
   createTemplateContext,
@@ -48,6 +48,18 @@ export const DEFAULT_SETTINGS: FluxTtsSettings = {
 
 const API_KEY_MASK = "••••••••••••";
 
+/** Keys whose value change reveals or hides other definitions, so setControlValue must trigger a structural update(). */
+const VISIBILITY_TRIGGER_KEYS = new Set(["saveLocation", "noteFolderMode", "useTemplate"]);
+
+interface TemplateSettingOptions {
+  name: string;
+  desc: string;
+  exampleExtension: string;
+  fallback: string;
+  getValue: () => string;
+  setValue: (value: string) => void;
+}
+
 export class FluxTtsSettingTab extends PluginSettingTab {
   plugin: FluxTtsPlugin;
 
@@ -56,12 +68,234 @@ export class FluxTtsSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
-  display(): void {
-    const { containerEl } = this;
-    const hasApiKey = Boolean(this.plugin.getApiKey());
-    containerEl.empty();
+  getControlValue(key: string): unknown {
+    switch (key) {
+      case "model":
+        return this.plugin.settings.model;
+      case "saveLocation":
+        return this.plugin.settings.saveLocation;
+      case "audioFolder":
+        return this.plugin.settings.audioFolder;
+      case "noteFolderMode":
+        return this.plugin.settings.noteFolderMode;
+      case "noteFolder":
+        return this.plugin.settings.noteFolder;
+      case "useTemplate":
+        return this.plugin.settings.useTemplate;
+      case "noteTemplatePath":
+        return this.plugin.settings.noteTemplatePath;
+      case "startDelayMs":
+        return this.plugin.settings.startDelayMs;
+      case "cleanupTranscript":
+        return this.plugin.settings.cleanupTranscript;
+      case "segmentedTranscript":
+        return this.plugin.settings.segmentedTranscript;
+      default:
+        return undefined;
+    }
+  }
 
-    new Setting(containerEl)
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    const settings = this.plugin.settings;
+    switch (key) {
+      case "model":
+        settings.model = String(value);
+        break;
+      case "saveLocation":
+        settings.saveLocation = value as AudioSaveLocation;
+        break;
+      case "audioFolder":
+        settings.audioFolder = String(value);
+        break;
+      case "noteFolderMode":
+        settings.noteFolderMode = value as NoteFolderMode;
+        break;
+      case "noteFolder":
+        settings.noteFolder = String(value);
+        break;
+      case "useTemplate":
+        settings.useTemplate = Boolean(value);
+        break;
+      case "noteTemplatePath": {
+        const trimmed = String(value).trim();
+        settings.noteTemplatePath = trimmed ? normalizePath(trimmed) : "";
+        break;
+      }
+      case "startDelayMs":
+        settings.startDelayMs = Number(value);
+        break;
+      case "cleanupTranscript":
+        settings.cleanupTranscript = Boolean(value);
+        break;
+      case "segmentedTranscript":
+        settings.segmentedTranscript = Boolean(value);
+        break;
+      default:
+        return;
+    }
+
+    await this.plugin.saveSettings();
+    if (VISIBILITY_TRIGGER_KEYS.has(key)) {
+      this.update();
+    }
+  }
+
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      {
+        name: "Groq API key",
+        desc: "Stored in Obsidian secret storage.",
+        render: (setting) => this.renderApiKeySetting(setting)
+      },
+      {
+        name: "Groq model",
+        desc: "Turbo is the default for fastest transcription.",
+        control: {
+          type: "dropdown",
+          key: "model",
+          options: Object.fromEntries(GROQ_MODELS.map((model) => [model.id, model.name]))
+        }
+      },
+      {
+        type: "group",
+        heading: "Recording",
+        items: [
+          {
+            name: "Recording start delay",
+            desc:
+              "Milliseconds to wait after the microphone opens before capture begins. " +
+              "Raise this if the first second of your recordings gets clipped on slower hardware.",
+            control: {
+              type: "slider",
+              key: "startDelayMs",
+              min: 0,
+              max: 2000,
+              step: 100
+            }
+          }
+        ]
+      },
+      {
+        type: "group",
+        heading: "Audio files",
+        items: [
+          {
+            name: "Audio save location",
+            desc: "Choose where recorded audio files are written.",
+            control: {
+              type: "dropdown",
+              key: "saveLocation",
+              options: {
+                "audio-folder": "Separate audio folder",
+                attachments: "Obsidian attachments folder",
+                root: "Vault root"
+              }
+            }
+          },
+          {
+            name: "Audio folder",
+            desc: "Used when save location is set to a separate audio folder.",
+            visible: () => this.plugin.settings.saveLocation === "audio-folder",
+            control: { type: "text", key: "audioFolder" }
+          },
+          {
+            name: "Audio filename",
+            desc: "Use {{date}}, {{time}}, {{datetime}}, {{year}}, {{month}}, {{day}}, {{hour}}, {{minute}}, and {{second}}.",
+            render: (setting) =>
+              this.renderTemplateSetting(setting, {
+                name: "Audio filename",
+                desc:
+                  "Use {{date}}, {{time}}, {{datetime}}, {{year}}, {{month}}, {{day}}, {{hour}}, {{minute}}, and {{second}}.",
+                exampleExtension: ".m4a",
+                fallback: DEFAULT_SETTINGS.audioNameTemplate,
+                getValue: () => this.plugin.settings.audioNameTemplate,
+                setValue: (value) => {
+                  this.plugin.settings.audioNameTemplate = value;
+                }
+              })
+          }
+        ]
+      },
+      {
+        type: "group",
+        heading: "Transcription notes",
+        items: [
+          {
+            name: "Note save location",
+            desc: "Choose where transcription notes are created.",
+            control: {
+              type: "dropdown",
+              key: "noteFolderMode",
+              options: {
+                root: "Vault root",
+                attachments: "Obsidian attachments folder",
+                custom: "Separate folder"
+              }
+            }
+          },
+          {
+            name: "Note folder",
+            desc: "Used when note save location is set to a separate folder.",
+            visible: () => this.plugin.settings.noteFolderMode === "custom",
+            control: { type: "text", key: "noteFolder", placeholder: "transcriptions" }
+          },
+          {
+            name: "Transcription note filename",
+            desc: "Uses the same filename placeholders as audio files.",
+            render: (setting) =>
+              this.renderTemplateSetting(setting, {
+                name: "Transcription note filename",
+                desc: "Uses the same filename placeholders as audio files.",
+                exampleExtension: ".md",
+                fallback: DEFAULT_SETTINGS.noteNameTemplate,
+                getValue: () => this.plugin.settings.noteNameTemplate,
+                setValue: (value) => {
+                  this.plugin.settings.noteNameTemplate = value;
+                }
+              })
+          },
+          {
+            name: "Use note template",
+            desc: "When off, notes contain only transcript text and the embedded audio link.",
+            control: { type: "toggle", key: "useTemplate" }
+          },
+          {
+            name: "Note template file",
+            desc:
+              "Vault path to a Markdown note used as the template, like Templates/Transcription.md. Supports " +
+              "{{transcript}}, {{audioPath}}, {{audioEmbed}}, {{originalTranscript}}, and the date and time " +
+              "placeholders.",
+            visible: () => this.plugin.settings.useTemplate,
+            control: { type: "text", key: "noteTemplatePath", placeholder: "Templates/Transcription.md" }
+          }
+        ]
+      },
+      {
+        type: "group",
+        heading: "Transcript processing",
+        items: [
+          {
+            name: "Clean up transcript with AI",
+            desc:
+              "Send the raw transcript to a Groq language model to fix punctuation, remove filler words, " +
+              "and add paragraph breaks. The original transcript is kept too, under an \"Original transcript\" " +
+              "heading in the note. Skipped when timestamped segments are enabled, so segment text stays " +
+              "aligned with the audio.",
+            control: { type: "toggle", key: "cleanupTranscript" }
+          },
+          {
+            name: "Timestamped segments",
+            desc: "Write the transcript as timestamped segments that link to their position in the audio file.",
+            control: { type: "toggle", key: "segmentedTranscript" }
+          }
+        ]
+      }
+    ];
+  }
+
+  private renderApiKeySetting(setting: Setting): void {
+    const hasApiKey = Boolean(this.plugin.getApiKey());
+    setting
       .setName("Groq API key")
       .setDesc(hasApiKey ? "A key is saved in Obsidian secret storage." : "Stored in Obsidian secret storage.")
       .addText((text) => {
@@ -91,189 +325,13 @@ export class FluxTtsSettingTab extends PluginSettingTab {
           .setDisabled(!hasApiKey)
           .onClick(() => {
             this.plugin.setApiKey("");
-            this.display();
+            this.update();
           });
-      });
-
-    new Setting(containerEl)
-      .setName("Groq model")
-      .setDesc("Turbo is the default for fastest transcription.")
-      .addDropdown((dropdown) => {
-        GROQ_MODELS.forEach((model) => dropdown.addOption(model.id, model.name));
-        dropdown.setValue(this.plugin.settings.model).onChange(async (value) => {
-          this.plugin.settings.model = value;
-          await this.plugin.saveSettings();
-        });
-      });
-
-    new Setting(containerEl).setName("Recording").setHeading();
-
-    new Setting(containerEl)
-      .setName("Recording start delay")
-      .setDesc(
-        "Milliseconds to wait after the microphone opens before capture begins. " +
-          "Raise this if the first second of your recordings gets clipped on slower hardware."
-      )
-      .addSlider((slider) => {
-        slider
-          .setLimits(0, 2000, 100)
-          .setValue(this.plugin.settings.startDelayMs)
-          .setDynamicTooltip()
-          .onChange(async (value) => {
-            this.plugin.settings.startDelayMs = value;
-            await this.plugin.saveSettings();
-          });
-      });
-
-    new Setting(containerEl).setName("Audio files").setHeading();
-
-    new Setting(containerEl)
-      .setName("Audio save location")
-      .setDesc("Choose where recorded audio files are written.")
-      .addDropdown((dropdown) => {
-        dropdown
-          .addOption("audio-folder", "Separate audio folder")
-          .addOption("attachments", "Obsidian attachments folder")
-          .addOption("root", "Vault root")
-          .setValue(this.plugin.settings.saveLocation)
-          .onChange(async (value) => {
-            this.plugin.settings.saveLocation = value as AudioSaveLocation;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
-
-    if (this.plugin.settings.saveLocation === "audio-folder") {
-      new Setting(containerEl)
-        .setName("Audio folder")
-        .setDesc("Used when save location is set to a separate audio folder.")
-        .addText((text) => {
-          text.setValue(this.plugin.settings.audioFolder).onChange(async (value) => {
-            this.plugin.settings.audioFolder = value;
-            await this.plugin.saveSettings();
-          });
-        });
-    }
-
-    this.addFilenameTemplateSetting({
-      name: "Audio filename",
-      desc: "Use {{date}}, {{time}}, {{datetime}}, {{year}}, {{month}}, {{day}}, {{hour}}, {{minute}}, and {{second}}.",
-      exampleExtension: ".m4a",
-      fallback: DEFAULT_SETTINGS.audioNameTemplate,
-      getValue: () => this.plugin.settings.audioNameTemplate,
-      setValue: (value) => {
-        this.plugin.settings.audioNameTemplate = value;
-      }
-    });
-
-    new Setting(containerEl).setName("Transcription notes").setHeading();
-
-    new Setting(containerEl)
-      .setName("Note save location")
-      .setDesc("Choose where transcription notes are created.")
-      .addDropdown((dropdown) => {
-        dropdown
-          .addOption("root", "Vault root")
-          .addOption("attachments", "Obsidian attachments folder")
-          .addOption("custom", "Separate folder")
-          .setValue(this.plugin.settings.noteFolderMode)
-          .onChange(async (value) => {
-            this.plugin.settings.noteFolderMode = value as NoteFolderMode;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
-
-    if (this.plugin.settings.noteFolderMode === "custom") {
-      new Setting(containerEl)
-        .setName("Note folder")
-        .setDesc("Used when note save location is set to a separate folder.")
-        .addText((text) => {
-          text.setPlaceholder("transcriptions").setValue(this.plugin.settings.noteFolder).onChange(async (value) => {
-            this.plugin.settings.noteFolder = value;
-            await this.plugin.saveSettings();
-          });
-        });
-    }
-
-    this.addFilenameTemplateSetting({
-      name: "Transcription note filename",
-      desc: "Uses the same filename placeholders as audio files.",
-      exampleExtension: ".md",
-      fallback: DEFAULT_SETTINGS.noteNameTemplate,
-      getValue: () => this.plugin.settings.noteNameTemplate,
-      setValue: (value) => {
-        this.plugin.settings.noteNameTemplate = value;
-      }
-    });
-
-    new Setting(containerEl)
-      .setName("Use note template")
-      .setDesc("When off, notes contain only transcript text and the embedded audio link.")
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.useTemplate).onChange(async (value) => {
-          this.plugin.settings.useTemplate = value;
-          await this.plugin.saveSettings();
-          this.display();
-        });
-      });
-
-    if (this.plugin.settings.useTemplate) {
-      new Setting(containerEl)
-        .setName("Note template file")
-        .setDesc(
-          "Vault path to a Markdown note used as the template, like Templates/Transcription.md. Supports " +
-            "{{transcript}}, {{audioPath}}, {{audioEmbed}}, {{originalTranscript}}, and the date and time " +
-            "placeholders."
-        )
-        .addText((text) => {
-          text
-            .setPlaceholder("Templates/Transcription.md")
-            .setValue(this.plugin.settings.noteTemplatePath)
-            .onChange(async (value) => {
-              this.plugin.settings.noteTemplatePath = value.trim() ? normalizePath(value.trim()) : "";
-              await this.plugin.saveSettings();
-            });
-        });
-    }
-
-    new Setting(containerEl).setName("Transcript processing").setHeading();
-
-    new Setting(containerEl)
-      .setName("Clean up transcript with AI")
-      .setDesc(
-        "Send the raw transcript to a Groq language model to fix punctuation, remove filler words, " +
-          "and add paragraph breaks. The original transcript is kept too, under an \"Original transcript\" " +
-          "heading in the note. Skipped when timestamped segments are enabled, so segment text stays " +
-          "aligned with the audio."
-      )
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.cleanupTranscript).onChange(async (value) => {
-          this.plugin.settings.cleanupTranscript = value;
-          await this.plugin.saveSettings();
-        });
-      });
-
-    new Setting(containerEl)
-      .setName("Timestamped segments")
-      .setDesc("Write the transcript as timestamped segments that link to their position in the audio file.")
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.segmentedTranscript).onChange(async (value) => {
-          this.plugin.settings.segmentedTranscript = value;
-          await this.plugin.saveSettings();
-        });
       });
   }
 
-  private addFilenameTemplateSetting(options: {
-    name: string;
-    desc: string;
-    exampleExtension: string;
-    fallback: string;
-    getValue: () => string;
-    setValue: (value: string) => void;
-  }): void {
-    const setting = new Setting(this.containerEl).setName(options.name).setDesc(options.desc);
+  private renderTemplateSetting(setting: Setting, options: TemplateSettingOptions): void {
+    setting.setName(options.name).setDesc(options.desc);
     const previewEl = setting.descEl.createDiv({ cls: "flux-tts-template-preview" });
 
     const updatePreview = (template: string): boolean => {
