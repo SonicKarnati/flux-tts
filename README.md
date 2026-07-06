@@ -1,55 +1,45 @@
 # Flux TTS
 
-Flux TTS is an Obsidian plugin that records audio from the ribbon, saves the recording to your vault, sends it to [Groq](https://groq.com) for speech-to-text transcription, and creates a note with the transcript and an audio embed.
+An Obsidian plugin that records audio from the ribbon, saves it to your vault, transcribes it with [Groq](https://groq.com) Whisper, and creates a note with the transcript and an audio embed.
 
 ## Features
 
-- One-click recording from the ribbon, or via command palette commands (`Toggle recording`, `Start recording`, `Stop recording`).
-- Groq Whisper transcription (`whisper-large-v3-turbo` for speed, `whisper-large-v3` for accuracy), switchable from settings or the `Cycle transcription model` command.
-- **Timestamped segments** (optional): the transcript is written as segments, each linked to its position in the audio (`[[recording.m4a#t=72|1:12]]`), so you can jump straight to any part of the recording.
-- **AI transcript cleanup** (optional): a Groq language model fixes punctuation, removes filler words, and adds paragraph breaks without changing the content. The original transcript is never discarded — it's kept in the note under an "Original transcript" heading.
-- Note templates from a file in your vault, the same mental model as Obsidian's core Templates plugin.
-- Live filename previews in settings, with validation that catches malformed `{{placeholders}}` before they ever reach a filename.
-- Warns if your microphone goes silent or disconnects mid-recording, and automatically stops (with a Notice) after a full minute of continuous silence, so a muted or disconnected mic doesn't record dead air indefinitely. Also flags transcripts that look implausibly short for the recording length.
-- Works on desktop and mobile (any Obsidian environment that supports `MediaRecorder`).
+- One-click recording from the ribbon, or command-palette commands (toggle/start/stop).
+- Groq Whisper transcription — `whisper-large-v3-turbo` (fast) or `whisper-large-v3` (accurate), switchable in settings.
+- **Inline transcription** — transcribe straight into the note at your cursor, with a footnote linking back to the recording.
+- **Timestamped segments** (optional) — each line links to its moment in the audio.
+- **AI cleanup** (optional) — a Groq LLM fixes punctuation and removes filler words; the original transcript is kept, never discarded.
+- **Live waveform** while recording, so you can see your mic is working.
+- Note templates from a vault file, live filename previews, and validation that catches malformed `{{placeholders}}`.
+- Warns and auto-stops on a silent or disconnected mic. Works on desktop and mobile.
 
 ## Setup
 
-1. Create an API key at [console.groq.com](https://console.groq.com/keys).
-2. Open **Settings → Flux TTS** and paste the key. It is stored in Obsidian's secret storage, not in plain-text plugin data.
-3. Click the microphone ribbon icon to start recording; click again to stop, and the transcription note opens automatically.
+1. Create a free API key at [console.groq.com/keys](https://console.groq.com/keys).
+2. Open **Settings → Flux TTS** and paste the key (stored in Obsidian's secret storage, not plain text).
+3. Click the microphone ribbon icon to start; click again to stop. The note opens automatically.
 
-## Settings
+The Settings tab covers the model, recording start delay, audio/note save locations, filename and note templates, AI cleanup, and timestamped segments — each with inline help.
 
-- **Groq API key** — stored in Obsidian secret storage.
-- **Groq model** — `whisper-large-v3-turbo` (fast, default) or `whisper-large-v3` (accurate).
-- **Recording start delay** — wait 0–2000 ms after the microphone opens before capture begins. Raise this if the first second of recordings is clipped on slower hardware.
-- **Audio save location** — a dedicated folder, the Obsidian attachments folder, or the vault root.
-- **Audio filename / Transcription note filename** — templates using `{{date}}`, `{{time}}`, `{{datetime}}`, `{{year}}`, `{{month}}`, `{{day}}`, `{{hour}}`, `{{minute}}`, `{{second}}`. Each field shows a live preview and warns on unbalanced or unknown placeholders.
-- **Note save location** — vault root, the attachments folder, or a separate folder.
-- **Use note template / Note template file** — point at a Markdown note in your vault (for example `Templates/Transcription.md`) containing `{{transcript}}`, `{{audioPath}}`, `{{audioEmbed}}`, `{{originalTranscript}}`, and any date/time placeholders.
-- **Clean up transcript with AI** — post-process the transcript with `llama-3.3-70b-versatile` via the same Groq key. Falls back to the raw transcript if the call fails. Skipped when timestamped segments are enabled so segment text stays aligned with the audio. When it runs, the note shows the cleaned-up transcript up top and the untouched original underneath an `## Original transcript` heading — cleanup never destroys the source text.
-- **Timestamped segments** — request per-segment timestamps from Groq and write the transcript as linked segments.
+## Compatibility
+
+Requires **Obsidian 1.13.0+** (the settings screen uses the 1.13.0 declarative settings API). Obsidian serves older installs the newest compatible version, so update Obsidian to get the latest release.
 
 ## Privacy
 
-Audio is saved locally in your vault. Transcription sends the recorded audio to Groq using your API key; if AI cleanup is enabled, the transcript text is also sent to Groq. No other services are used, and nothing is sent anywhere until you record something.
+Audio is saved locally. Transcription (and AI cleanup, if enabled) sends data to Groq using your API key. Nothing is sent anywhere until you record.
 
-**This plugin requires a free [Groq](https://console.groq.com/keys) account and API key.** Groq's speech-to-text API is the only way this plugin performs transcription, so the plugin has no functionality without one.
+## Roadmap & development
 
-## Development
-
-Source lives in `src/` (TypeScript) and is bundled to `main.js` with esbuild.
+See [ROADMAP.md](ROADMAP.md) for what's next. Source is TypeScript in `src/`, bundled to `main.js` with esbuild:
 
 ```bash
 npm install
-npm run dev    # watch mode, rebuilds main.js on change
+npm run dev    # watch mode
 npm run build  # type-check + production build
 ```
 
-To test locally, copy (or symlink) this folder into `<vault>/.obsidian/plugins/flux-tts/` and enable it in **Settings → Community plugins**. The distributable files are `manifest.json`, `main.js`, `styles.css`, and `versions.json`.
-
-Releases are built by GitHub Actions: pushing a tag that matches the `version` in `manifest.json` creates a draft GitHub release with the distributable files attached.
+Releases are built by GitHub Actions: pushing a tag matching the `manifest.json` version attaches `main.js`, `manifest.json`, and `styles.css` to a release.
 
 ## License
 

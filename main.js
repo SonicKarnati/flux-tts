@@ -442,6 +442,14 @@ var RecorderController = class {
   get isRecording() {
     return this.state === "recording";
   }
+  /**
+   * The live analyser node for the current recording, or null when not
+   * recording (or when AudioContext is unavailable). Shared with silence
+   * detection — it reads the same signal, it doesn't open a second capture.
+   */
+  getAnalyser() {
+    return this.analyser;
+  }
   async start(startDelayMs) {
     if (this.state !== "idle") {
       return;
@@ -673,6 +681,105 @@ function extensionFromMime(mimeType) {
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
+
+// src/waveform.ts
+var WaveformView = class {
+  constructor(container, getAnalyser) {
+    this.container = container;
+    this.getAnalyser = getAnalyser;
+    this.rafId = null;
+    this.data = null;
+    this.canvas = container.createEl("canvas", { cls: "flux-tts-waveform-canvas" });
+    this.ctx = this.canvas.getContext("2d");
+  }
+  /** Begin animating. Safe to call when already running. */
+  start() {
+    if (this.rafId !== null) {
+      return;
+    }
+    this.container.toggleClass("is-recording", true);
+    const loop = () => {
+      this.draw();
+      this.rafId = window.requestAnimationFrame(loop);
+    };
+    this.rafId = window.requestAnimationFrame(loop);
+  }
+  /** Stop animating and clear the canvas. Safe to call when already stopped. */
+  stop() {
+    if (this.rafId !== null) {
+      window.cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.container.toggleClass("is-recording", false);
+    this.clear();
+  }
+  /** Remove the canvas from the DOM (plugin unload). */
+  dispose() {
+    this.stop();
+    this.canvas.remove();
+  }
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx) {
+      return;
+    }
+    const { width, height } = this.syncCanvasSize();
+    ctx.clearRect(0, 0, width, height);
+    const analyser = this.getAnalyser();
+    const stroke = this.strokeColor();
+    ctx.lineWidth = Math.max(1, Math.floor(height / 12));
+    ctx.strokeStyle = stroke;
+    ctx.beginPath();
+    if (!analyser) {
+      ctx.moveTo(0, height / 2);
+      ctx.lineTo(width, height / 2);
+      ctx.stroke();
+      return;
+    }
+    const bins = analyser.fftSize;
+    if (!this.data || this.data.length !== bins) {
+      this.data = new Uint8Array(new ArrayBuffer(bins));
+    }
+    const data = this.data;
+    analyser.getByteTimeDomainData(data);
+    const step = width / bins;
+    for (let index = 0; index < bins; index += 1) {
+      const value = data[index] / 255;
+      const y = value * height;
+      const x = index * step;
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  }
+  /** Match the backing store to the element's CSS size (crisp on HiDPI). */
+  syncCanvasSize() {
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = this.canvas.clientWidth || this.container.clientWidth || 80;
+    const cssHeight = this.canvas.clientHeight || this.container.clientHeight || 20;
+    const width = Math.max(1, Math.round(cssWidth * dpr));
+    const height = Math.max(1, Math.round(cssHeight * dpr));
+    if (this.canvas.width !== width) {
+      this.canvas.width = width;
+    }
+    if (this.canvas.height !== height) {
+      this.canvas.height = height;
+    }
+    return { width, height };
+  }
+  clear() {
+    if (this.ctx) {
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+  }
+  strokeColor() {
+    const color = window.getComputedStyle(this.canvas).color;
+    return color || "#888";
+  }
+};
 
 // src/transcription.ts
 var import_obsidian4 = require("obsidian");
@@ -924,6 +1031,9 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     this.settings = { ...DEFAULT_SETTINGS };
     this.recorder = null;
     this.ribbonIconEl = null;
+    this.waveform = null;
+    this.waveformFloatEl = null;
+    this.inlineSession = null;
   }
   async onload() {
     await this.loadSettings();
@@ -983,13 +1093,65 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
         new import_obsidian6.Notice(`Transcription model: ${next.name}`);
       }
     });
+    this.addCommand({
+      id: "toggle-inline-transcription",
+      name: "Toggle inline transcription (at cursor)",
+      callback: () => void this.toggleInlineRecording()
+    });
+    this.addCommand({
+      id: "start-inline-transcription",
+      name: "Start inline transcription (at cursor)",
+      callback: () => {
+        var _a;
+        if ((_a = this.recorder) == null ? void 0 : _a.isActive) {
+          new import_obsidian6.Notice("Already recording.");
+          return;
+        }
+        void this.startInlineRecording();
+      }
+    });
+    this.addCommand({
+      id: "stop-inline-transcription",
+      name: "Stop inline transcription",
+      callback: () => {
+        var _a;
+        if (!((_a = this.recorder) == null ? void 0 : _a.isActive)) {
+          new import_obsidian6.Notice("Not recording.");
+          return;
+        }
+        this.stopRecording();
+      }
+    });
     this.addSettingTab(new FluxTtsSettingTab(this.app, this));
+    this.setupWaveform();
     this.updateRibbonState(false);
   }
   onunload() {
-    var _a;
+    var _a, _b, _c;
     (_a = this.recorder) == null ? void 0 : _a.dispose();
     this.recorder = null;
+    (_b = this.waveform) == null ? void 0 : _b.dispose();
+    this.waveform = null;
+    (_c = this.waveformFloatEl) == null ? void 0 : _c.remove();
+    this.waveformFloatEl = null;
+  }
+  /**
+   * Create the live-waveform view. Desktop has a status bar to host it; mobile
+   * doesn't, so we use a floating pill that CSS reveals only while recording.
+   */
+  setupWaveform() {
+    let container;
+    if (import_obsidian6.Platform.isMobile) {
+      this.waveformFloatEl = document.body.createDiv({ cls: "flux-tts-waveform-float" });
+      container = this.waveformFloatEl;
+    } else {
+      container = this.addStatusBarItem();
+      container.addClass("flux-tts-waveform-status");
+    }
+    this.waveform = new WaveformView(container, () => {
+      var _a, _b;
+      return (_b = (_a = this.recorder) == null ? void 0 : _a.getAnalyser()) != null ? _b : null;
+    });
   }
   async loadSettings() {
     var _a;
@@ -1074,7 +1236,54 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       new import_obsidian6.Notice("Saving and transcribing...");
     }
   }
+  async toggleInlineRecording() {
+    var _a;
+    if ((_a = this.recorder) == null ? void 0 : _a.isActive) {
+      this.stopRecording();
+      return;
+    }
+    await this.startInlineRecording();
+  }
+  /**
+   * Start a recording that will be inserted at the cursor of the active note
+   * (rather than creating a new note). A placeholder is dropped in immediately
+   * so the insertion point survives any editing done while recording.
+   */
+  async startInlineRecording() {
+    if (!this.recorder || this.recorder.isActive) {
+      return;
+    }
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian6.MarkdownView);
+    if (!view) {
+      new import_obsidian6.Notice("Open a note and place the cursor where the transcription should go.");
+      return;
+    }
+    const editor = view.editor;
+    const id = `flux-${Date.now().toString(36)}`;
+    const placeholder = `\u27E8transcribing\u2026 ${id}\u27E9`;
+    editor.replaceSelection(placeholder);
+    this.inlineSession = { editor, id, placeholder };
+    await this.startRecording();
+    if (!this.recorder.isActive) {
+      this.removeInlinePlaceholder(this.inlineSession);
+      this.inlineSession = null;
+    }
+  }
+  removeInlinePlaceholder(session) {
+    const { editor, placeholder } = session;
+    const content = editor.getValue();
+    const index = content.indexOf(placeholder);
+    if (index >= 0) {
+      editor.replaceRange("", editor.offsetToPos(index), editor.offsetToPos(index + placeholder.length));
+    }
+  }
   async handleRecordingFinished(result) {
+    const inline = this.inlineSession;
+    this.inlineSession = null;
+    if (inline) {
+      await this.handleInlineFinished(result, inline);
+      return;
+    }
     const context = createTemplateContext(/* @__PURE__ */ new Date());
     const audioFileName = `${renderTemplate(this.settings.audioNameTemplate, context)}.${result.extension}`;
     const noteFileName = `${renderTemplate(this.settings.noteNameTemplate, context)}.md`;
@@ -1132,6 +1341,75 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     }
     new import_obsidian6.Notice("Transcription saved.");
   }
+  async handleInlineFinished(result, session) {
+    const context = createTemplateContext(/* @__PURE__ */ new Date());
+    const audioFileName = `${renderTemplate(this.settings.audioNameTemplate, context)}.${result.extension}`;
+    const audioPath = resolveAudioPath(this.app, this.settings, audioFileName);
+    const audioBuffer = await result.blob.arrayBuffer();
+    const savedAudioPath = await writeBinaryUnique(this.app, audioPath, `.${result.extension}`, audioBuffer);
+    const { text, failed } = await this.runInlineTranscription(result, audioFileName);
+    try {
+      this.insertInlineTranscript(session, text, savedAudioPath);
+      new import_obsidian6.Notice(failed ? "Audio saved; transcription failed \u2014 see the note." : "Transcription inserted.");
+    } catch (error) {
+      console.error(error);
+      this.removeInlinePlaceholder(session);
+      new import_obsidian6.Notice(`Could not insert inline. Recording saved at ${savedAudioPath}.`);
+    }
+  }
+  /** Save-path-free transcription for inline mode: no segments, cleanup if enabled. */
+  async runInlineTranscription(result, audioFileName) {
+    const apiKey = this.getApiKey();
+    try {
+      if (!apiKey) {
+        throw new Error("Missing Groq API key.");
+      }
+      const transcription = await transcribeAudio({
+        apiKey,
+        model: this.settings.model,
+        blob: result.blob,
+        fileName: audioFileName,
+        wantSegments: false
+      });
+      let text = transcription.text.trim();
+      if (this.settings.cleanupTranscript && text) {
+        try {
+          text = await cleanupTranscript(apiKey, text);
+        } catch (error) {
+          console.error(error);
+          new import_obsidian6.Notice("Transcript cleanup failed; using the raw transcript.");
+        }
+      }
+      return { text, failed: false };
+    } catch (error) {
+      console.error(error);
+      new import_obsidian6.Notice("Audio saved, but transcription failed.");
+      return { text: `Transcription failed: ${getErrorMessage(error)}`, failed: true };
+    }
+  }
+  /**
+   * Replace the placeholder with the transcript plus a footnote reference, and
+   * append the footnote definition (a link back to the recording) at the end of
+   * the note. Obsidian renders `[^id]` as a Wikipedia-style superscript link.
+   */
+  insertInlineTranscript(session, text, audioPath) {
+    const { editor, id, placeholder } = session;
+    const replacement = `${text.trim()}[^${id}]`;
+    const content = editor.getValue();
+    const index = content.indexOf(placeholder);
+    if (index >= 0) {
+      editor.replaceRange(replacement, editor.offsetToPos(index), editor.offsetToPos(index + placeholder.length));
+    } else {
+      editor.replaceSelection(replacement);
+    }
+    const definition = `[^${id}]: [[${audioPath}]]`;
+    const current = editor.getValue();
+    const separator = current.endsWith("\n\n") ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+    const lastLine = editor.lastLine();
+    const endPos = { line: lastLine, ch: editor.getLine(lastLine).length };
+    editor.replaceRange(`${separator}${definition}
+`, endPos);
+  }
   async renderNote(transcript, audioPath, context, originalTranscript) {
     const values = Object.assign({}, context, {
       transcript: transcript.trim(),
@@ -1169,12 +1447,40 @@ ${values.originalTranscript}`;
     return null;
   }
   updateRibbonState(isRecording) {
+    var _a, _b;
+    if (isRecording) {
+      (_a = this.waveform) == null ? void 0 : _a.start();
+    } else {
+      (_b = this.waveform) == null ? void 0 : _b.stop();
+    }
     if (!this.ribbonIconEl) {
       return;
     }
+    const label = isRecording ? "Stop transcription" : "Start transcription";
     this.ribbonIconEl.toggleClass("is-active", isRecording);
-    this.ribbonIconEl.setAttr("aria-label", isRecording ? "Stop transcription" : "Start transcription");
+    this.ribbonIconEl.setAttr("aria-label", label);
     this.ribbonIconEl.setAttr("aria-pressed", String(isRecording));
+    (0, import_obsidian6.setIcon)(this.ribbonIconEl, isRecording ? "square" : "mic");
+    this.updateRibbonMenuLabel(label);
+  }
+  /**
+   * The desktop `aria-label` above is enough on desktop, but Obsidian mobile
+   * rebuilds its slide-up ribbon menu from each item's internal `title` — which
+   * the DOM mutation never touches, so the menu kept showing "Start
+   * transcription" after recording began. Update that title too so the next
+   * menu rebuild reflects the real state. Internal API, guarded defensively so
+   * it degrades to the desktop-only behavior if the shape ever changes.
+   */
+  updateRibbonMenuLabel(label) {
+    var _a;
+    const leftRibbon = this.app.workspace.leftRibbon;
+    const item = (_a = leftRibbon == null ? void 0 : leftRibbon.items) == null ? void 0 : _a.find((entry) => entry.buttonEl === this.ribbonIconEl);
+    if (item) {
+      item.title = label;
+      if (typeof item.ariaLabel === "string") {
+        item.ariaLabel = label;
+      }
+    }
   }
   getApiKey() {
     const secretStorage = this.app.secretStorage;

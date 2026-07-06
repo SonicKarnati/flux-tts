@@ -1,6 +1,7 @@
-import { Notice, Plugin, TFile, normalizePath } from "obsidian";
+import { Editor, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, setIcon } from "obsidian";
 import { DEFAULT_SETTINGS, FluxTtsSettingTab, FluxTtsSettings, GROQ_MODELS } from "./settings";
 import { RecorderController, RecordingResult } from "./recording";
+import { WaveformView } from "./waveform";
 import {
   TranscriptionSegment,
   cleanupTranscript,
@@ -29,10 +30,35 @@ interface SecretStorage {
   setSecret(key: string, value: string): void;
 }
 
+// Shape of Obsidian's internal left-ribbon registry, narrowed to what we touch.
+interface RibbonItem {
+  title?: string;
+  ariaLabel?: string;
+  buttonEl?: HTMLElement;
+}
+
+interface RibbonHost {
+  items?: RibbonItem[];
+}
+
+/**
+ * An in-progress inline transcription: the transcript replaces `placeholder`
+ * (dropped at the cursor when recording started) in `editor`, and a footnote
+ * keyed by `id` links the inserted text back to the saved recording.
+ */
+interface InlineSession {
+  editor: Editor;
+  id: string;
+  placeholder: string;
+}
+
 export default class FluxTtsPlugin extends Plugin {
   settings: FluxTtsSettings = { ...DEFAULT_SETTINGS };
   recorder: RecorderController | null = null;
   ribbonIconEl: HTMLElement | null = null;
+  waveform: WaveformView | null = null;
+  private waveformFloatEl: HTMLElement | null = null;
+  private inlineSession: InlineSession | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -97,13 +123,64 @@ export default class FluxTtsPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "toggle-inline-transcription",
+      name: "Toggle inline transcription (at cursor)",
+      callback: () => void this.toggleInlineRecording()
+    });
+
+    this.addCommand({
+      id: "start-inline-transcription",
+      name: "Start inline transcription (at cursor)",
+      callback: () => {
+        if (this.recorder?.isActive) {
+          new Notice("Already recording.");
+          return;
+        }
+        void this.startInlineRecording();
+      }
+    });
+
+    this.addCommand({
+      id: "stop-inline-transcription",
+      name: "Stop inline transcription",
+      callback: () => {
+        if (!this.recorder?.isActive) {
+          new Notice("Not recording.");
+          return;
+        }
+        this.stopRecording();
+      }
+    });
+
     this.addSettingTab(new FluxTtsSettingTab(this.app, this));
+    this.setupWaveform();
     this.updateRibbonState(false);
   }
 
   onunload(): void {
     this.recorder?.dispose();
     this.recorder = null;
+    this.waveform?.dispose();
+    this.waveform = null;
+    this.waveformFloatEl?.remove();
+    this.waveformFloatEl = null;
+  }
+
+  /**
+   * Create the live-waveform view. Desktop has a status bar to host it; mobile
+   * doesn't, so we use a floating pill that CSS reveals only while recording.
+   */
+  private setupWaveform(): void {
+    let container: HTMLElement;
+    if (Platform.isMobile) {
+      this.waveformFloatEl = document.body.createDiv({ cls: "flux-tts-waveform-float" });
+      container = this.waveformFloatEl;
+    } else {
+      container = this.addStatusBarItem();
+      container.addClass("flux-tts-waveform-status");
+    }
+    this.waveform = new WaveformView(container, () => this.recorder?.getAnalyser() ?? null);
   }
 
   async loadSettings(): Promise<void> {
@@ -204,7 +281,65 @@ export default class FluxTtsPlugin extends Plugin {
     }
   }
 
+  async toggleInlineRecording(): Promise<void> {
+    if (this.recorder?.isActive) {
+      this.stopRecording();
+      return;
+    }
+    await this.startInlineRecording();
+  }
+
+  /**
+   * Start a recording that will be inserted at the cursor of the active note
+   * (rather than creating a new note). A placeholder is dropped in immediately
+   * so the insertion point survives any editing done while recording.
+   */
+  async startInlineRecording(): Promise<void> {
+    if (!this.recorder || this.recorder.isActive) {
+      return;
+    }
+
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) {
+      new Notice("Open a note and place the cursor where the transcription should go.");
+      return;
+    }
+
+    const editor = view.editor;
+    const id = `flux-${Date.now().toString(36)}`;
+    const placeholder = `⟨transcribing… ${id}⟩`;
+    editor.replaceSelection(placeholder);
+    this.inlineSession = { editor, id, placeholder };
+
+    await this.startRecording();
+
+    // startRecording is a no-op-with-Notice when the mic or API key is missing;
+    // if it didn't actually start, roll the placeholder back out.
+    if (!this.recorder.isActive) {
+      this.removeInlinePlaceholder(this.inlineSession);
+      this.inlineSession = null;
+    }
+  }
+
+  private removeInlinePlaceholder(session: InlineSession): void {
+    const { editor, placeholder } = session;
+    const content = editor.getValue();
+    const index = content.indexOf(placeholder);
+    if (index >= 0) {
+      editor.replaceRange("", editor.offsetToPos(index), editor.offsetToPos(index + placeholder.length));
+    }
+  }
+
   async handleRecordingFinished(result: RecordingResult): Promise<void> {
+    // Inline mode inserts at the cursor instead of creating a note. Claim the
+    // session up front so a second recording can't reuse a stale placeholder.
+    const inline = this.inlineSession;
+    this.inlineSession = null;
+    if (inline) {
+      await this.handleInlineFinished(result, inline);
+      return;
+    }
+
     const context = createTemplateContext(new Date());
     const audioFileName = `${renderTemplate(this.settings.audioNameTemplate, context)}.${result.extension}`;
     const noteFileName = `${renderTemplate(this.settings.noteNameTemplate, context)}.md`;
@@ -276,6 +411,86 @@ export default class FluxTtsPlugin extends Plugin {
     new Notice("Transcription saved.");
   }
 
+  private async handleInlineFinished(result: RecordingResult, session: InlineSession): Promise<void> {
+    const context = createTemplateContext(new Date());
+    const audioFileName = `${renderTemplate(this.settings.audioNameTemplate, context)}.${result.extension}`;
+    const audioPath = resolveAudioPath(this.app, this.settings, audioFileName);
+    const audioBuffer = await result.blob.arrayBuffer();
+    const savedAudioPath = await writeBinaryUnique(this.app, audioPath, `.${result.extension}`, audioBuffer);
+
+    const { text, failed } = await this.runInlineTranscription(result, audioFileName);
+
+    try {
+      this.insertInlineTranscript(session, text, savedAudioPath);
+      new Notice(failed ? "Audio saved; transcription failed — see the note." : "Transcription inserted.");
+    } catch (error) {
+      console.error(error);
+      // The editor may have been closed mid-recording. Don't lose the audio.
+      this.removeInlinePlaceholder(session);
+      new Notice(`Could not insert inline. Recording saved at ${savedAudioPath}.`);
+    }
+  }
+
+  /** Save-path-free transcription for inline mode: no segments, cleanup if enabled. */
+  private async runInlineTranscription(
+    result: RecordingResult,
+    audioFileName: string
+  ): Promise<{ text: string; failed: boolean }> {
+    const apiKey = this.getApiKey();
+    try {
+      if (!apiKey) {
+        throw new Error("Missing Groq API key.");
+      }
+      const transcription = await transcribeAudio({
+        apiKey,
+        model: this.settings.model,
+        blob: result.blob,
+        fileName: audioFileName,
+        wantSegments: false
+      });
+      let text = transcription.text.trim();
+      if (this.settings.cleanupTranscript && text) {
+        try {
+          text = await cleanupTranscript(apiKey, text);
+        } catch (error) {
+          console.error(error);
+          new Notice("Transcript cleanup failed; using the raw transcript.");
+        }
+      }
+      return { text, failed: false };
+    } catch (error: unknown) {
+      console.error(error);
+      new Notice("Audio saved, but transcription failed.");
+      return { text: `Transcription failed: ${getErrorMessage(error)}`, failed: true };
+    }
+  }
+
+  /**
+   * Replace the placeholder with the transcript plus a footnote reference, and
+   * append the footnote definition (a link back to the recording) at the end of
+   * the note. Obsidian renders `[^id]` as a Wikipedia-style superscript link.
+   */
+  private insertInlineTranscript(session: InlineSession, text: string, audioPath: string): void {
+    const { editor, id, placeholder } = session;
+    const replacement = `${text.trim()}[^${id}]`;
+
+    const content = editor.getValue();
+    const index = content.indexOf(placeholder);
+    if (index >= 0) {
+      editor.replaceRange(replacement, editor.offsetToPos(index), editor.offsetToPos(index + placeholder.length));
+    } else {
+      // Placeholder was edited away; fall back to the current cursor.
+      editor.replaceSelection(replacement);
+    }
+
+    const definition = `[^${id}]: [[${audioPath}]]`;
+    const current = editor.getValue();
+    const separator = current.endsWith("\n\n") ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+    const lastLine = editor.lastLine();
+    const endPos = { line: lastLine, ch: editor.getLine(lastLine).length };
+    editor.replaceRange(`${separator}${definition}\n`, endPos);
+  }
+
   async renderNote(
     transcript: string,
     audioPath: string,
@@ -316,13 +531,42 @@ export default class FluxTtsPlugin extends Plugin {
   }
 
   updateRibbonState(isRecording: boolean): void {
+    if (isRecording) {
+      this.waveform?.start();
+    } else {
+      this.waveform?.stop();
+    }
+
     if (!this.ribbonIconEl) {
       return;
     }
 
+    const label = isRecording ? "Stop transcription" : "Start transcription";
     this.ribbonIconEl.toggleClass("is-active", isRecording);
-    this.ribbonIconEl.setAttr("aria-label", isRecording ? "Stop transcription" : "Start transcription");
+    this.ribbonIconEl.setAttr("aria-label", label);
     this.ribbonIconEl.setAttr("aria-pressed", String(isRecording));
+    // Swap the glyph so state reads even where the text label is stale.
+    setIcon(this.ribbonIconEl, isRecording ? "square" : "mic");
+    this.updateRibbonMenuLabel(label);
+  }
+
+  /**
+   * The desktop `aria-label` above is enough on desktop, but Obsidian mobile
+   * rebuilds its slide-up ribbon menu from each item's internal `title` — which
+   * the DOM mutation never touches, so the menu kept showing "Start
+   * transcription" after recording began. Update that title too so the next
+   * menu rebuild reflects the real state. Internal API, guarded defensively so
+   * it degrades to the desktop-only behavior if the shape ever changes.
+   */
+  private updateRibbonMenuLabel(label: string): void {
+    const leftRibbon = (this.app.workspace as unknown as { leftRibbon?: RibbonHost }).leftRibbon;
+    const item = leftRibbon?.items?.find((entry) => entry.buttonEl === this.ribbonIconEl);
+    if (item) {
+      item.title = label;
+      if (typeof item.ariaLabel === "string") {
+        item.ariaLabel = label;
+      }
+    }
   }
 
   getApiKey(): string {

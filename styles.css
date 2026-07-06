@@ -7,3 +7,46 @@
 .flux-tts-template-preview.flux-tts-template-invalid {
   color: var(--text-error);
 }
+
+/* Live recording waveform (status bar host, desktop). Collapsed until recording. */
+.flux-tts-waveform-status {
+  display: none;
+  align-items: center;
+  padding: 0 var(--size-2-2);
+}
+
+.flux-tts-waveform-status.is-recording {
+  display: inline-flex;
+}
+
+.flux-tts-waveform-canvas {
+  color: var(--interactive-accent);
+  width: 72px;
+  height: var(--font-ui-medium, 16px);
+  display: block;
+}
+
+/* Live recording waveform (floating pill, mobile). CSS reveals it while recording. */
+.flux-tts-waveform-float {
+  display: none;
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + var(--size-4-4));
+  z-index: var(--layer-status-bar, 15);
+  padding: var(--size-2-2) var(--size-4-2);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-s);
+  pointer-events: none;
+}
+
+.flux-tts-waveform-float.is-recording {
+  display: block;
+}
+
+.flux-tts-waveform-float .flux-tts-waveform-canvas {
+  width: 140px;
+  height: 28px;
+}

@@ -62,6 +62,15 @@ export class RecorderController {
     return this.state === "recording";
   }
 
+  /**
+   * The live analyser node for the current recording, or null when not
+   * recording (or when AudioContext is unavailable). Shared with silence
+   * detection — it reads the same signal, it doesn't open a second capture.
+   */
+  getAnalyser(): AnalyserNode | null {
+    return this.analyser;
+  }
+
   async start(startDelayMs: number): Promise<void> {
     if (this.state !== "idle") {
       return;
