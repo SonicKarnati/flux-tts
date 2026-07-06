@@ -174,7 +174,7 @@ export default class FluxTtsPlugin extends Plugin {
   private setupWaveform(): void {
     let container: HTMLElement;
     if (Platform.isMobile) {
-      this.waveformFloatEl = document.body.createDiv({ cls: "flux-tts-waveform-float" });
+      this.waveformFloatEl = (activeDocument ?? document).body!.createDiv({ cls: "flux-tts-waveform-float" });
       container = this.waveformFloatEl;
     } else {
       container = this.addStatusBarItem();
