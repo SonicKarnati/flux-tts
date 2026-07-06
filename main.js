@@ -1142,7 +1142,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
   setupWaveform() {
     let container;
     if (import_obsidian6.Platform.isMobile) {
-      this.waveformFloatEl = document.body.createDiv({ cls: "flux-tts-waveform-float" });
+      this.waveformFloatEl = (activeDocument != null ? activeDocument : document).body.createDiv({ cls: "flux-tts-waveform-float" });
       container = this.waveformFloatEl;
     } else {
       container = this.addStatusBarItem();
