@@ -23,7 +23,7 @@ The Settings tab covers the model, recording start delay, audio/note save locati
 
 ## Compatibility
 
-Requires **Obsidian 1.13.0+** (the settings screen uses the 1.13.0 declarative settings API). Obsidian serves older installs the newest compatible version, so update Obsidian to get the latest release.
+Requires **Obsidian 1.12.0+**. The settings screen uses the stable imperative settings API available in Obsidian 1.12.
 
 ## Privacy
 
