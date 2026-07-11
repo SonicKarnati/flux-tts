@@ -17,6 +17,7 @@ import {
   renderTemplate,
   validateTemplate
 } from "./templates";
+import { extractMediaUrl, fetchMediaTranscript } from "./media";
 
 const PLUGIN_ID = "flux-tts";
 const SECRET_KEY = `${PLUGIN_ID}-groq-api-key`;
@@ -154,6 +155,18 @@ export default class FluxTtsPlugin extends Plugin {
     });
 
     this.addSettingTab(new FluxTtsSettingTab(this.app, this));
+    this.registerEvent(
+      this.app.workspace.on("editor-paste", (event, editor) => {
+        if (!this.settings.autoMediaTranscripts) return;
+        const pastedText = event.clipboardData?.getData("text/plain") ?? "";
+        const mediaUrl = extractMediaUrl(pastedText);
+        if (!mediaUrl) return;
+        event.preventDefault();
+        const footnoteId = `media-${Date.now().toString(36)}`;
+        editor.replaceSelection(`${pastedText} [^${footnoteId}]`);
+        void this.insertMediaTranscript(editor, footnoteId, mediaUrl);
+      })
+    );
     this.setupWaveform();
     this.updateRibbonState(false);
   }
@@ -174,7 +187,7 @@ export default class FluxTtsPlugin extends Plugin {
   private setupWaveform(): void {
     let container: HTMLElement;
     if (Platform.isMobile) {
-      this.waveformFloatEl = (activeDocument ?? document).body!.createDiv({ cls: "flux-tts-waveform-float" });
+      this.waveformFloatEl = activeDocument.body.createDiv({ cls: "flux-tts-waveform-float" });
       container = this.waveformFloatEl;
     } else {
       container = this.addStatusBarItem();
@@ -234,6 +247,35 @@ export default class FluxTtsPlugin extends Plugin {
     this.settings.useTemplate = Boolean(this.settings.useTemplate);
     this.settings.cleanupTranscript = Boolean(this.settings.cleanupTranscript);
     this.settings.segmentedTranscript = Boolean(this.settings.segmentedTranscript);
+    this.settings.autoMediaTranscripts = Boolean(this.settings.autoMediaTranscripts);
+  }
+
+  private async insertMediaTranscript(editor: Editor, footnoteId: string, mediaUrl: string): Promise<void> {
+    new Notice("Fetching media transcript…");
+    try {
+      const result = await fetchMediaTranscript({
+        url: mediaUrl,
+        apiKey: this.getApiKey(),
+        model: this.settings.model,
+        wantSegments: this.settings.segmentedTranscript
+      });
+      let transcript = result.text.trim();
+      if (this.settings.cleanupTranscript && !this.settings.segmentedTranscript && this.getApiKey()) {
+        transcript = await cleanupTranscript(this.getApiKey(), transcript);
+      }
+      const indented = transcript.replace(/\n+/g, "\n    ");
+      const label = result.title.replace(/[\[\]]/g, "");
+      const footnote = `\n\n[^${footnoteId}]: **[${label}](${result.sourceUrl})** — transcript\n    ${indented}`;
+      const lastLine = editor.lastLine();
+      editor.replaceRange(footnote, { line: lastLine, ch: editor.getLine(lastLine).length });
+      new Notice("Media transcript added.");
+    } catch (error) {
+      const message = getErrorMessage(error);
+      const lastLine = editor.lastLine();
+      const footnote = `\n\n[^${footnoteId}]: Transcript unavailable — ${message}`;
+      editor.replaceRange(footnote, { line: lastLine, ch: editor.getLine(lastLine).length });
+      new Notice(`Could not transcribe media link: ${message}`);
+    }
   }
 
   async toggleRecording(): Promise<void> {
