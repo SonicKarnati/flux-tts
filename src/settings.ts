@@ -29,6 +29,7 @@ export interface FluxTtsSettings {
   startDelayMs: number;
   cleanupTranscript: boolean;
   segmentedTranscript: boolean;
+  autoMediaTranscripts: boolean;
 }
 
 export const DEFAULT_SETTINGS: FluxTtsSettings = {
@@ -43,7 +44,8 @@ export const DEFAULT_SETTINGS: FluxTtsSettings = {
   noteTemplatePath: "",
   startDelayMs: 0,
   cleanupTranscript: false,
-  segmentedTranscript: false
+  segmentedTranscript: false,
+  autoMediaTranscripts: false
 };
 
 const API_KEY_MASK = "••••••••••••";
@@ -92,7 +94,6 @@ export class FluxTtsSettingTab extends PluginSettingTab {
         slider
           .setLimits(0, 2000, 100)
           .setValue(this.plugin.settings.startDelayMs)
-          .setDynamicTooltip()
           .onChange(async (value) => {
             this.plugin.settings.startDelayMs = value;
             await this.plugin.saveSettings();
@@ -200,6 +201,18 @@ export class FluxTtsSettingTab extends PluginSettingTab {
     }
 
     new Setting(containerEl).setName("Transcript processing").setHeading();
+    new Setting(containerEl)
+      .setName("Automatically transcribe pasted media links")
+      .setDesc(
+        "When enabled, pasting a media link adds a citation-style footnote containing its transcript. " +
+          "YouTube captions are used when available; direct and public media files fall back to Groq transcription."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.autoMediaTranscripts).onChange(async (value) => {
+          this.plugin.settings.autoMediaTranscripts = value;
+          await this.plugin.saveSettings();
+        })
+      );
     new Setting(containerEl)
       .setName("Clean up transcript with AI")
       .setDesc(

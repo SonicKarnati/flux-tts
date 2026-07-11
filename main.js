@@ -28,7 +28,7 @@ __export(main_exports, {
   default: () => FluxTtsPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian2 = require("obsidian");
@@ -127,7 +127,8 @@ var DEFAULT_SETTINGS = {
   noteTemplatePath: "",
   startDelayMs: 0,
   cleanupTranscript: false,
-  segmentedTranscript: false
+  segmentedTranscript: false,
+  autoMediaTranscripts: false
 };
 var API_KEY_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
@@ -150,7 +151,7 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
     new import_obsidian2.Setting(containerEl).setName("Recording start delay").setDesc(
       "Milliseconds to wait after the microphone opens before capture begins. Raise this if the first second of your recordings gets clipped on slower hardware."
     ).addSlider(
-      (slider) => slider.setLimits(0, 2e3, 100).setValue(this.plugin.settings.startDelayMs).setDynamicTooltip().onChange(async (value) => {
+      (slider) => slider.setLimits(0, 2e3, 100).setValue(this.plugin.settings.startDelayMs).onChange(async (value) => {
         this.plugin.settings.startDelayMs = value;
         await this.plugin.saveSettings();
       })
@@ -226,6 +227,14 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
       );
     }
     new import_obsidian2.Setting(containerEl).setName("Transcript processing").setHeading();
+    new import_obsidian2.Setting(containerEl).setName("Automatically transcribe pasted media links").setDesc(
+      "When enabled, pasting a media link adds a citation-style footnote containing its transcript. YouTube captions are used when available; direct and public media files fall back to Groq transcription."
+    ).addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.autoMediaTranscripts).onChange(async (value) => {
+        this.plugin.settings.autoMediaTranscripts = value;
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian2.Setting(containerEl).setName("Clean up transcript with AI").setDesc(
       "Send the raw transcript to a Groq language model to fix punctuation, remove filler words, and add paragraph breaks. The original transcript is kept too. Skipped when timestamped segments are enabled."
     ).addToggle(
@@ -915,13 +924,134 @@ async function createNoteUnique(app, path, content) {
   return target;
 }
 
+// src/media.ts
+var import_obsidian6 = require("obsidian");
+var MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+function extractMediaUrl(text) {
+  var _a;
+  const matches = (_a = text.match(/https?:\/\/[^\s<>]+/g)) != null ? _a : [];
+  for (const raw of matches) {
+    const candidate = raw.replace(/[),.;!?]+$/, "");
+    try {
+      const url = new URL(candidate);
+      if (["http:", "https:"].includes(url.protocol)) return url.href;
+    } catch (e) {
+    }
+  }
+  return null;
+}
+async function fetchMediaTranscript(options) {
+  const youtubeId = getYouTubeId(options.url);
+  if (youtubeId) {
+    const captions = await fetchYouTubeCaptions(options.url);
+    if (captions) return captions;
+  }
+  const media = await resolveMediaAsset(options.url);
+  if (!options.apiKey) {
+    throw new Error("This link has no accessible captions. Add a Groq API key to transcribe its media.");
+  }
+  if (media.data.byteLength > MAX_MEDIA_BYTES) {
+    throw new Error("The linked media is larger than the 25 MB transcription limit.");
+  }
+  const transcription = await transcribeAudio({
+    apiKey: options.apiKey,
+    model: options.model,
+    blob: new Blob([media.data], { type: media.contentType }),
+    fileName: media.fileName,
+    wantSegments: options.wantSegments
+  });
+  return { ...transcription, title: media.title, sourceUrl: options.url };
+}
+async function fetchYouTubeCaptions(url) {
+  var _a, _b;
+  const page = await (0, import_obsidian6.requestUrl)({ url, throw: false });
+  if (page.status < 200 || page.status >= 300) throw new Error(`YouTube returned HTTP ${page.status}.`);
+  const tracksMatch = page.text.match(/"captionTracks":(\[.*?\]),"audioTracks"/s);
+  if (!tracksMatch) return null;
+  let tracks;
+  try {
+    tracks = JSON.parse(tracksMatch[1]);
+  } catch (e) {
+    return null;
+  }
+  const track = tracks.find((item) => item.baseUrl);
+  if (!(track == null ? void 0 : track.baseUrl)) return null;
+  const captionResponse = await (0, import_obsidian6.requestUrl)({ url: `${track.baseUrl}&fmt=json3`, throw: false });
+  if (captionResponse.status < 200 || captionResponse.status >= 300) return null;
+  const parsed = captionResponse.json;
+  const segments = ((_a = parsed.events) != null ? _a : []).map((event) => {
+    var _a2, _b2, _c, _d;
+    return {
+      start: ((_a2 = event.tStartMs) != null ? _a2 : 0) / 1e3,
+      end: (((_b2 = event.tStartMs) != null ? _b2 : 0) + ((_c = event.dDurationMs) != null ? _c : 0)) / 1e3,
+      text: ((_d = event.segs) != null ? _d : []).map((segment) => {
+        var _a3;
+        return (_a3 = segment.utf8) != null ? _a3 : "";
+      }).join("").replace(/\s+/g, " ").trim()
+    };
+  }).filter((segment) => segment.text);
+  if (!segments.length) return null;
+  const titleMatch = page.text.match(/<title>(.*?)<\/title>/is);
+  const title = decodeHtml(((_b = titleMatch == null ? void 0 : titleMatch[1]) == null ? void 0 : _b.replace(/\s*-\s*YouTube\s*$/, "").trim()) || "YouTube video");
+  return { title, sourceUrl: url, text: segments.map((segment) => segment.text).join(" "), segments };
+}
+async function resolveMediaAsset(url) {
+  var _a, _b, _c;
+  const first = await (0, import_obsidian6.requestUrl)({ url, throw: false });
+  if (first.status < 200 || first.status >= 300) throw new Error(`Media link returned HTTP ${first.status}.`);
+  const contentType = (_b = (_a = first.headers["content-type"]) == null ? void 0 : _a.split(";")[0]) != null ? _b : "";
+  if (contentType.startsWith("audio/") || contentType.startsWith("video/")) {
+    return mediaResponse(url, first.arrayBuffer, contentType, "Linked media");
+  }
+  const mediaUrl = findMetaContent(first.text, "og:video") || findMetaContent(first.text, "og:audio");
+  if (!mediaUrl) throw new Error("No public captions or downloadable audio/video were found at this link.");
+  const second = await (0, import_obsidian6.requestUrl)({ url: new URL(mediaUrl, url).href, throw: false });
+  if (second.status < 200 || second.status >= 300) throw new Error(`Linked media returned HTTP ${second.status}.`);
+  const mediaType = ((_c = second.headers["content-type"]) == null ? void 0 : _c.split(";")[0]) || "application/octet-stream";
+  return mediaResponse(mediaUrl, second.arrayBuffer, mediaType, decodeHtml(findMetaContent(first.text, "og:title") || "Linked media"));
+}
+function mediaResponse(url, data, contentType, title) {
+  var _a;
+  const extension = ((_a = contentType.split("/")[1]) == null ? void 0 : _a.replace(/[^a-z0-9]/gi, "")) || "media";
+  let fileName = `media.${extension}`;
+  try {
+    fileName = new URL(url).pathname.split("/").pop() || fileName;
+  } catch (e) {
+  }
+  return { data, contentType, fileName, title };
+}
+function getYouTubeId(url) {
+  var _a;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === "youtu.be") return parsed.pathname.slice(1).split("/")[0] || null;
+    if (parsed.hostname.endsWith("youtube.com")) {
+      if (parsed.pathname === "/watch") return parsed.searchParams.get("v");
+      const match = parsed.pathname.match(/^\/(?:shorts|embed)\/([^/]+)/);
+      return (_a = match == null ? void 0 : match[1]) != null ? _a : null;
+    }
+  } catch (e) {
+    return null;
+  }
+  return null;
+}
+function findMetaContent(html, property) {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const forward = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"));
+  const reverse = html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["']`, "i"));
+  return decodeHtml((forward == null ? void 0 : forward[1]) || (reverse == null ? void 0 : reverse[1]) || "") || null;
+}
+function decodeHtml(value) {
+  return value.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+}
+
 // src/main.ts
 var PLUGIN_ID = "flux-tts";
 var SECRET_KEY = `${PLUGIN_ID}-groq-api-key`;
 function getErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
-var FluxTtsPlugin = class extends import_obsidian6.Plugin {
+var FluxTtsPlugin = class extends import_obsidian7.Plugin {
   constructor() {
     super(...arguments);
     this.settings = { ...DEFAULT_SETTINGS };
@@ -937,12 +1067,12 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       onFinish: (result) => {
         this.handleRecordingFinished(result).catch((error) => {
           console.error(error);
-          new import_obsidian6.Notice(`Recording failed: ${getErrorMessage(error)}`);
+          new import_obsidian7.Notice(`Recording failed: ${getErrorMessage(error)}`);
         });
       },
       onError: (error) => {
         console.error(error);
-        new import_obsidian6.Notice(error.message);
+        new import_obsidian7.Notice(error.message);
       },
       onStateChange: (isRecording) => this.updateRibbonState(isRecording)
     });
@@ -960,7 +1090,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       callback: () => {
         var _a;
         if ((_a = this.recorder) == null ? void 0 : _a.isActive) {
-          new import_obsidian6.Notice("Already recording.");
+          new import_obsidian7.Notice("Already recording.");
           return;
         }
         void this.startRecording();
@@ -972,7 +1102,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       callback: () => {
         var _a;
         if (!((_a = this.recorder) == null ? void 0 : _a.isActive)) {
-          new import_obsidian6.Notice("Not recording.");
+          new import_obsidian7.Notice("Not recording.");
           return;
         }
         this.stopRecording();
@@ -986,7 +1116,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
         const next = GROQ_MODELS[(index + 1) % GROQ_MODELS.length];
         this.settings.model = next.id;
         await this.saveSettings();
-        new import_obsidian6.Notice(`Transcription model: ${next.name}`);
+        new import_obsidian7.Notice(`Transcription model: ${next.name}`);
       }
     });
     this.addCommand({
@@ -1000,7 +1130,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       callback: () => {
         var _a;
         if ((_a = this.recorder) == null ? void 0 : _a.isActive) {
-          new import_obsidian6.Notice("Already recording.");
+          new import_obsidian7.Notice("Already recording.");
           return;
         }
         void this.startInlineRecording();
@@ -1012,13 +1142,26 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       callback: () => {
         var _a;
         if (!((_a = this.recorder) == null ? void 0 : _a.isActive)) {
-          new import_obsidian6.Notice("Not recording.");
+          new import_obsidian7.Notice("Not recording.");
           return;
         }
         this.stopRecording();
       }
     });
     this.addSettingTab(new FluxTtsSettingTab(this.app, this));
+    this.registerEvent(
+      this.app.workspace.on("editor-paste", (event, editor) => {
+        var _a, _b;
+        if (!this.settings.autoMediaTranscripts) return;
+        const pastedText = (_b = (_a = event.clipboardData) == null ? void 0 : _a.getData("text/plain")) != null ? _b : "";
+        const mediaUrl = extractMediaUrl(pastedText);
+        if (!mediaUrl) return;
+        event.preventDefault();
+        const footnoteId = `media-${Date.now().toString(36)}`;
+        editor.replaceSelection(`${pastedText} [^${footnoteId}]`);
+        void this.insertMediaTranscript(editor, footnoteId, mediaUrl);
+      })
+    );
     this.setupWaveform();
     this.updateRibbonState(false);
   }
@@ -1037,8 +1180,8 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
    */
   setupWaveform() {
     let container;
-    if (import_obsidian6.Platform.isMobile) {
-      this.waveformFloatEl = (activeDocument != null ? activeDocument : document).body.createDiv({ cls: "flux-tts-waveform-float" });
+    if (import_obsidian7.Platform.isMobile) {
+      this.waveformFloatEl = activeDocument.body.createDiv({ cls: "flux-tts-waveform-float" });
       container = this.waveformFloatEl;
     } else {
       container = this.addStatusBarItem();
@@ -1089,6 +1232,39 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     this.settings.useTemplate = Boolean(this.settings.useTemplate);
     this.settings.cleanupTranscript = Boolean(this.settings.cleanupTranscript);
     this.settings.segmentedTranscript = Boolean(this.settings.segmentedTranscript);
+    this.settings.autoMediaTranscripts = Boolean(this.settings.autoMediaTranscripts);
+  }
+  async insertMediaTranscript(editor, footnoteId, mediaUrl) {
+    new import_obsidian7.Notice("Fetching media transcript\u2026");
+    try {
+      const result = await fetchMediaTranscript({
+        url: mediaUrl,
+        apiKey: this.getApiKey(),
+        model: this.settings.model,
+        wantSegments: this.settings.segmentedTranscript
+      });
+      let transcript = result.text.trim();
+      if (this.settings.cleanupTranscript && !this.settings.segmentedTranscript && this.getApiKey()) {
+        transcript = await cleanupTranscript(this.getApiKey(), transcript);
+      }
+      const indented = transcript.replace(/\n+/g, "\n    ");
+      const label = result.title.replace(/[\[\]]/g, "");
+      const footnote = `
+
+[^${footnoteId}]: **[${label}](${result.sourceUrl})** \u2014 transcript
+    ${indented}`;
+      const lastLine = editor.lastLine();
+      editor.replaceRange(footnote, { line: lastLine, ch: editor.getLine(lastLine).length });
+      new import_obsidian7.Notice("Media transcript added.");
+    } catch (error) {
+      const message = getErrorMessage(error);
+      const lastLine = editor.lastLine();
+      const footnote = `
+
+[^${footnoteId}]: Transcript unavailable \u2014 ${message}`;
+      editor.replaceRange(footnote, { line: lastLine, ch: editor.getLine(lastLine).length });
+      new import_obsidian7.Notice(`Could not transcribe media link: ${message}`);
+    }
   }
   async toggleRecording() {
     var _a;
@@ -1104,21 +1280,21 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       return;
     }
     if (!((_a = navigator.mediaDevices) == null ? void 0 : _a.getUserMedia) || typeof MediaRecorder === "undefined") {
-      new import_obsidian6.Notice("Audio recording is not available in this Obsidian environment.");
+      new import_obsidian7.Notice("Audio recording is not available in this Obsidian environment.");
       return;
     }
     if (!this.getApiKey()) {
-      new import_obsidian6.Notice("Add your Groq API key in Flux TTS settings first.");
+      new import_obsidian7.Notice("Add your Groq API key in Flux TTS settings first.");
       return;
     }
     try {
       await this.recorder.start(this.settings.startDelayMs);
       if (this.recorder.isRecording) {
-        new import_obsidian6.Notice("Recording started.");
+        new import_obsidian7.Notice("Recording started.");
       }
     } catch (error) {
       console.error(error);
-      new import_obsidian6.Notice(`Could not start recording: ${getErrorMessage(error)}`);
+      new import_obsidian7.Notice(`Could not start recording: ${getErrorMessage(error)}`);
     }
   }
   stopRecording() {
@@ -1129,7 +1305,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     const wasRecording = this.recorder.isRecording;
     this.recorder.stop();
     if (wasRecording) {
-      new import_obsidian6.Notice("Saving and transcribing...");
+      new import_obsidian7.Notice("Saving and transcribing...");
     }
   }
   async toggleInlineRecording() {
@@ -1149,9 +1325,9 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     if (!this.recorder || this.recorder.isActive) {
       return;
     }
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian6.MarkdownView);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView);
     if (!view) {
-      new import_obsidian6.Notice("Open a note and place the cursor where the transcription should go.");
+      new import_obsidian7.Notice("Open a note and place the cursor where the transcription should go.");
       return;
     }
     const editor = view.editor;
@@ -1208,7 +1384,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       console.error(error);
       transcriptionFailed = true;
       rawTranscript = `Transcription failed: ${getErrorMessage(error)}`;
-      new import_obsidian6.Notice("Audio saved, but transcription failed.");
+      new import_obsidian7.Notice("Audio saved, but transcription failed.");
     }
     const useSegments = !transcriptionFailed && this.settings.segmentedTranscript && segments.length > 0;
     let displayTranscript = rawTranscript;
@@ -1219,7 +1395,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
         originalTranscript = rawTranscript;
       } catch (error) {
         console.error(error);
-        new import_obsidian6.Notice("Transcript cleanup failed; using the raw transcript.");
+        new import_obsidian7.Notice("Transcript cleanup failed; using the raw transcript.");
       }
     }
     const transcriptForNote = useSegments ? renderSegmentedTranscript(segments, savedAudioPath) : displayTranscript;
@@ -1232,10 +1408,10 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     }
     const createdNotePath = await createNoteUnique(this.app, notePath, noteBody);
     const file = this.app.vault.getAbstractFileByPath(createdNotePath);
-    if (file instanceof import_obsidian6.TFile) {
+    if (file instanceof import_obsidian7.TFile) {
       await this.app.workspace.getLeaf(false).openFile(file);
     }
-    new import_obsidian6.Notice("Transcription saved.");
+    new import_obsidian7.Notice("Transcription saved.");
   }
   async handleInlineFinished(result, session) {
     const context = createTemplateContext(/* @__PURE__ */ new Date());
@@ -1246,11 +1422,11 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
     const { text, failed } = await this.runInlineTranscription(result, audioFileName);
     try {
       this.insertInlineTranscript(session, text, savedAudioPath);
-      new import_obsidian6.Notice(failed ? "Audio saved; transcription failed \u2014 see the note." : "Transcription inserted.");
+      new import_obsidian7.Notice(failed ? "Audio saved; transcription failed \u2014 see the note." : "Transcription inserted.");
     } catch (error) {
       console.error(error);
       this.removeInlinePlaceholder(session);
-      new import_obsidian6.Notice(`Could not insert inline. Recording saved at ${savedAudioPath}.`);
+      new import_obsidian7.Notice(`Could not insert inline. Recording saved at ${savedAudioPath}.`);
     }
   }
   /** Save-path-free transcription for inline mode: no segments, cleanup if enabled. */
@@ -1273,13 +1449,13 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
           text = await cleanupTranscript(apiKey, text);
         } catch (error) {
           console.error(error);
-          new import_obsidian6.Notice("Transcript cleanup failed; using the raw transcript.");
+          new import_obsidian7.Notice("Transcript cleanup failed; using the raw transcript.");
         }
       }
       return { text, failed: false };
     } catch (error) {
       console.error(error);
-      new import_obsidian6.Notice("Audio saved, but transcription failed.");
+      new import_obsidian7.Notice("Audio saved, but transcription failed.");
       return { text: `Transcription failed: ${getErrorMessage(error)}`, failed: true };
     }
   }
@@ -1318,7 +1494,7 @@ var FluxTtsPlugin = class extends import_obsidian6.Plugin {
       if (template !== null) {
         return renderTemplate(template, values).trim();
       }
-      new import_obsidian6.Notice(`Note template file not found: ${this.settings.noteTemplatePath}. Using the default layout.`);
+      new import_obsidian7.Notice(`Note template file not found: ${this.settings.noteTemplatePath}. Using the default layout.`);
     }
     let body = `${values.transcript}
 
@@ -1333,10 +1509,10 @@ ${values.originalTranscript}`;
     return body;
   }
   async readNoteTemplate(path) {
-    const normalized = (0, import_obsidian6.normalizePath)(path);
+    const normalized = (0, import_obsidian7.normalizePath)(path);
     for (const candidate of [normalized, `${normalized}.md`]) {
       const file = this.app.vault.getAbstractFileByPath(candidate);
-      if (file instanceof import_obsidian6.TFile) {
+      if (file instanceof import_obsidian7.TFile) {
         return this.app.vault.cachedRead(file);
       }
     }
@@ -1356,7 +1532,7 @@ ${values.originalTranscript}`;
     this.ribbonIconEl.toggleClass("is-active", isRecording);
     this.ribbonIconEl.setAttr("aria-label", label);
     this.ribbonIconEl.setAttr("aria-pressed", String(isRecording));
-    (0, import_obsidian6.setIcon)(this.ribbonIconEl, isRecording ? "square" : "mic");
+    (0, import_obsidian7.setIcon)(this.ribbonIconEl, isRecording ? "square" : "mic");
     this.updateRibbonMenuLabel(label);
   }
   /**

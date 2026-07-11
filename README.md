@@ -10,6 +10,7 @@ An Obsidian plugin that records audio from the ribbon, saves it to your vault, t
 - **Timestamped segments** (optional) — each line links to its moment in the audio.
 - **AI cleanup** (optional) — a Groq LLM fixes punctuation and removes filler words; the original transcript is kept, never discarded.
 - **Live waveform** while recording, so you can see your mic is working.
+- **Media-link transcripts** (opt in) — paste a YouTube or public media link to add its transcript as a citation-style footnote.
 - Note templates from a vault file, live filename previews, and validation that catches malformed `{{placeholders}}`.
 - Warns and auto-stops on a silent or disconnected mic. Works on desktop and mobile.
 
@@ -27,7 +28,7 @@ Requires **Obsidian 1.12.0+**. The settings screen uses the stable imperative se
 
 ## Privacy
 
-Audio is saved locally. Transcription (and AI cleanup, if enabled) sends data to Groq using your API key. Nothing is sent anywhere until you record.
+Audio is saved locally. Transcription (and AI cleanup, if enabled) sends data to Groq using your API key. When media-link transcripts are enabled, pasted links are fetched to locate captions or public media; media without captions is sent to Groq for transcription. Nothing is sent until you record or enable and use media-link transcripts.
 
 ## Roadmap & development
 
