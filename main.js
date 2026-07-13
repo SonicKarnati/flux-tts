@@ -1537,7 +1537,7 @@ var FluxTtsPlugin = class extends import_obsidian7.Plugin {
     await ensureParentFolder(this.app, path);
     let file = this.app.vault.getAbstractFileByPath(path);
     if (file instanceof import_obsidian7.TFile && this.settings.recordingNoteBehavior === "recreate") {
-      await this.app.vault.delete(file);
+      await this.app.fileManager.trashFile(file);
       file = null;
     }
     if (!(file instanceof import_obsidian7.TFile)) {
