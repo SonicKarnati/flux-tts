@@ -391,7 +391,7 @@ export default class FluxTtsPlugin extends Plugin {
     await ensureParentFolder(this.app, path);
     let file = this.app.vault.getAbstractFileByPath(path);
     if (file instanceof TFile && this.settings.recordingNoteBehavior === "recreate") {
-      await this.app.vault.delete(file);
+      await this.app.fileManager.trashFile(file);
       file = null;
     }
     if (!(file instanceof TFile)) {

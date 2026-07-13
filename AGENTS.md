@@ -64,6 +64,7 @@ resolved in later releases.
 
 | Date | Version | Commit | Result |
 |---|---:|---|---|
+| Jul 13, 2026 | 0.3.4 | `071d8da` | Failed |
 | Jul 11, 2026 | 0.3.3 | `7b27556` | Completed |
 | Jul 11, 2026 | 0.3.2 | `495ebf8` | Completed |
 | Jul 6, 2026 | 0.3.1 | `69abfd7` | Completed |
@@ -81,13 +82,21 @@ resolved in later releases.
 
 ### Release provenance
 
-- Versions `0.3.3` and `0.3.2` passed verified GitHub artifact attestations for
+- Versions `0.3.4`, `0.3.3`, and `0.3.2` passed verified GitHub artifact attestations for
   both `main.js` and `styles.css`.
 - Versions `0.3.0` and `0.2.1` were flagged for missing attestations for those
   assets. Keep the GitHub Actions provenance-attestation step intact and verify
   attestations before publishing every release.
 
 ### Findings and prevention rules
+
+- **Minimum Obsidian version:** Declarative settings APIs including
+  `SettingTab.update()` require Obsidian 1.13.0. Keep `manifest.json` and the
+  corresponding `versions.json` entry at `1.13.0` or newer while these APIs are
+  used (error in `0.3.4`, `src/settings.ts:211,229`).
+- **Respect deletion preferences:** Use `app.fileManager.trashFile()` rather
+  than `vault.delete()` so note recreation follows the user's configured trash
+  preference (warning in `0.3.4`, `src/main.ts:394`).
 
 - **`editor-paste` event handlers:** First check `evt.defaultPrevented` and
   return early when it is already handled (review finding in `0.3.3`,
