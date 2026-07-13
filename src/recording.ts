@@ -29,10 +29,10 @@ export interface RecordingResult {
 export interface RecorderHandlers {
   onFinish: (result: RecordingResult) => void;
   onError: (error: Error) => void;
-  onStateChange: (isRecording: boolean) => void;
+  onStateChange: (state: RecorderState, message?: string) => void;
 }
 
-type RecorderState = "idle" | "starting" | "recording";
+export type RecorderState = "idle" | "starting" | "recording" | "paused" | "recovering" | "error";
 
 export class RecorderController {
   private state: RecorderState = "idle";
@@ -43,6 +43,8 @@ export class RecorderController {
   private selectedMime: MimeCandidate | null = null;
   private startedAt = 0;
   private stoppedAt: number | null = null;
+  private pausedAt: number | null = null;
+  private totalPausedMs = 0;
 
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -51,6 +53,8 @@ export class RecorderController {
   private deviceChangeHandler: (() => void) | null = null;
   private activeDeviceId = "";
   private disconnectNotified = false;
+  private manuallyPaused = false;
+  private trackEndedHandler: (() => void) | null = null;
 
   constructor(private handlers: RecorderHandlers) {}
 
@@ -60,6 +64,10 @@ export class RecorderController {
 
   get isRecording(): boolean {
     return this.state === "recording";
+  }
+
+  get currentState(): RecorderState {
+    return this.state;
   }
 
   /**
@@ -77,8 +85,11 @@ export class RecorderController {
     }
 
     this.state = "starting";
+    this.handlers.onStateChange("starting");
     this.cancelRequested = false;
     this.stoppedAt = null;
+    this.pausedAt = null;
+    this.totalPausedMs = 0;
     this.disconnectNotified = false;
 
     try {
@@ -112,11 +123,12 @@ export class RecorderController {
       this.state = "recording";
       this.watchSilence();
       this.watchDeviceChanges();
-      this.handlers.onStateChange(true);
+      this.handlers.onStateChange("recording");
     } catch (error) {
       this.cleanup();
       this.state = "idle";
-      this.handlers.onStateChange(false);
+      this.handlers.onStateChange("error", getErrorText(error));
+      this.handlers.onStateChange("idle");
       throw error instanceof Error ? error : new Error(String(error));
     }
   }
@@ -126,13 +138,46 @@ export class RecorderController {
       this.cancelRequested = true;
       return;
     }
-    if (this.state !== "recording" || !this.mediaRecorder || this.mediaRecorder.state !== "recording") {
+    if (
+      !["recording", "paused", "recovering", "error"].includes(this.state) ||
+      !this.mediaRecorder ||
+      this.mediaRecorder.state === "inactive"
+    ) {
       return;
     }
 
     this.stoppedAt = Date.now();
-    this.handlers.onStateChange(false);
+    this.state = "idle";
+    this.handlers.onStateChange("idle");
     this.mediaRecorder.stop();
+  }
+
+  pause(message = "Transcription paused."): void {
+    if (this.state !== "recording" || !this.mediaRecorder) return;
+    this.manuallyPaused = true;
+    this.pausedAt = Date.now();
+    if (this.mediaRecorder.state === "recording") {
+      this.mediaRecorder.requestData();
+      this.mediaRecorder.pause();
+    }
+    this.state = "paused";
+    this.stopSilenceWatch();
+    this.handlers.onStateChange("paused", message);
+  }
+
+  async resume(): Promise<void> {
+    if (this.state !== "paused" && this.state !== "error") return;
+    this.manuallyPaused = false;
+    const track = this.mediaStream?.getAudioTracks()[0];
+    if (track?.readyState === "live" && this.mediaRecorder?.state === "paused") {
+      this.finishPauseTiming();
+      this.mediaRecorder.resume();
+      this.state = "recording";
+      this.watchSilence();
+      this.handlers.onStateChange("recording", "Transcription resumed.");
+      return;
+    }
+    await this.recoverMicrophone();
   }
 
   /** Tear everything down without producing a recording (plugin unload). */
@@ -150,6 +195,7 @@ export class RecorderController {
     }
     this.cleanup();
     this.state = "idle";
+    this.handlers.onStateChange("idle");
   }
 
   private finalize(): void {
@@ -157,7 +203,8 @@ export class RecorderController {
     const selectedMime = this.selectedMime;
     const mimeType = selectedMime?.mime || chunks[0]?.type || "audio/webm";
     const extension = selectedMime?.extension || extensionFromMime(mimeType);
-    const durationSeconds = Math.max(0, ((this.stoppedAt ?? Date.now()) - this.startedAt) / 1000);
+    const pausedMs = this.totalPausedMs + (this.pausedAt === null ? 0 : (this.stoppedAt ?? Date.now()) - this.pausedAt);
+    const durationSeconds = Math.max(0, ((this.stoppedAt ?? Date.now()) - this.startedAt - pausedMs) / 1000);
 
     this.cleanup();
     this.state = "idle";
@@ -184,9 +231,12 @@ export class RecorderController {
     }
 
     if (this.mediaStream) {
+      const track = this.mediaStream.getAudioTracks()[0];
+      if (track && this.trackEndedHandler) track.removeEventListener("ended", this.trackEndedHandler);
       this.mediaStream.getTracks().forEach((track) => track.stop());
       this.mediaStream = null;
     }
+    this.trackEndedHandler = null;
 
     this.mediaRecorder = null;
     this.chunks = [];
@@ -281,8 +331,15 @@ export class RecorderController {
       return;
     }
 
+    if (this.deviceChangeHandler && navigator.mediaDevices?.removeEventListener) {
+      navigator.mediaDevices.removeEventListener("devicechange", this.deviceChangeHandler);
+    }
     const track = this.mediaStream?.getAudioTracks()[0];
     this.activeDeviceId = track?.getSettings?.().deviceId ?? "";
+    if (track) {
+      this.trackEndedHandler = () => void this.handleMicrophoneLost();
+      track.addEventListener("ended", this.trackEndedHandler);
+    }
 
     this.deviceChangeHandler = () => {
       void this.checkInputStillPresent();
@@ -311,17 +368,62 @@ export class RecorderController {
       return;
     }
 
+    await this.handleMicrophoneLost();
+  }
+
+  private async handleMicrophoneLost(): Promise<void> {
+    if (!["recording", "paused"].includes(this.state) || this.disconnectNotified) return;
     this.disconnectNotified = true;
-    const fragment = activeDocument.createDocumentFragment();
-    fragment.createSpan({
-      text: "Your recording input disconnected — audio after this point may be silent. "
-    });
-    const button = fragment.createEl("button", { text: "Stop now" });
-    const notice = new Notice(fragment, 0);
-    button.addEventListener("click", () => {
-      notice.hide();
-      this.stop();
-    });
+    this.manuallyPaused = false;
+    if (this.pausedAt === null) this.pausedAt = Date.now();
+    if (this.mediaRecorder?.state === "recording") {
+      this.mediaRecorder.requestData();
+      this.mediaRecorder.pause();
+    }
+    this.stopSilenceWatch();
+    this.state = "recovering";
+    this.handlers.onStateChange("recovering", "Microphone access was interrupted. Reconnecting…");
+    await this.recoverMicrophone();
+  }
+
+  private async recoverMicrophone(): Promise<void> {
+    this.state = "recovering";
+    this.handlers.onStateChange("recovering", "Restoring microphone access…");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const previousRecorder = this.mediaRecorder;
+      if (previousRecorder && previousRecorder.state !== "inactive") {
+        previousRecorder.onstop = null;
+        previousRecorder.stop();
+      }
+      if (this.mediaStream) this.mediaStream.getTracks().forEach((track) => track.stop());
+      this.mediaStream = stream;
+      const options = this.selectedMime ? { mimeType: this.selectedMime.mime } : undefined;
+      const recorder = new MediaRecorder(stream, options);
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) this.chunks.push(event.data);
+      };
+      recorder.onstop = () => this.finalize();
+      this.mediaRecorder = recorder;
+      recorder.start();
+      this.disconnectNotified = false;
+      this.finishPauseTiming();
+      this.state = "recording";
+      this.watchSilence();
+      this.watchDeviceChanges();
+      this.handlers.onStateChange("recording", "Transcription resumed.");
+    } catch (error) {
+      console.error(error);
+      this.state = "error";
+      this.handlers.onStateChange("error", "Microphone could not be restored. Use Resume to try again.");
+    }
+  }
+
+  private finishPauseTiming(): void {
+    if (this.pausedAt !== null) {
+      this.totalPausedMs += Date.now() - this.pausedAt;
+      this.pausedAt = null;
+    }
   }
 }
 
@@ -344,4 +446,8 @@ function extensionFromMime(mimeType: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function getErrorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
