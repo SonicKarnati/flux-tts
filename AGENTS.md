@@ -64,6 +64,7 @@ resolved in later releases.
 
 | Date | Version | Commit | Result |
 |---|---:|---|---|
+| Jul 13, 2026 | 0.3.5 | `901cbb7` | Completed |
 | Jul 13, 2026 | 0.3.4 | `071d8da` | Failed |
 | Jul 11, 2026 | 0.3.3 | `7b27556` | Completed |
 | Jul 11, 2026 | 0.3.2 | `495ebf8` | Completed |
@@ -82,7 +83,7 @@ resolved in later releases.
 
 ### Release provenance
 
-- Versions `0.3.4`, `0.3.3`, and `0.3.2` passed verified GitHub artifact attestations for
+- Versions `0.3.5`, `0.3.4`, `0.3.3`, and `0.3.2` passed verified GitHub artifact attestations for
   both `main.js` and `styles.css`.
 - Versions `0.3.0` and `0.2.1` were flagged for missing attestations for those
   assets. Keep the GitHub Actions provenance-attestation step intact and verify
@@ -97,6 +98,9 @@ resolved in later releases.
 - **Respect deletion preferences:** Use `app.fileManager.trashFile()` rather
   than `vault.delete()` so note recreation follows the user's configured trash
   preference (warning in `0.3.4`, `src/main.ts:394`).
+- **0.3.5 verification:** The corrective review completed with no source-code
+  findings. Release attestations, network requests, vault read/write behavior,
+  dependencies, and code-obfuscation checks all passed.
 
 - **`editor-paste` event handlers:** First check `evt.defaultPrevented` and
   return early when it is already handled (review finding in `0.3.3`,
