@@ -140,144 +140,112 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
     super(app, plugin);
     this.plugin = plugin;
   }
-  getSettingDefinitions() {
-    return [
-      {
-        type: "group",
-        heading: "Transcription service",
-        items: [
-          { name: "Groq API key", render: (setting) => this.renderApiKeySetting(setting) },
-          {
-            name: "Groq model",
-            desc: "Turbo is the default for fastest transcription.",
-            control: { type: "dropdown", key: "model", options: Object.fromEntries(GROQ_MODELS.map((model) => [model.id, model.name])) }
-          }
-        ]
-      },
-      {
-        type: "group",
-        heading: "Recording",
-        items: [
-          {
-            name: "Live recording note",
-            desc: "Open a temporary Recording... note with a live waveform and Stop button while recording.",
-            control: { type: "toggle", key: "recordingNoteEnabled" }
-          },
-          {
-            name: "Recording note location",
-            desc: "Choose where Recording....md is stored.",
-            visible: () => this.plugin.settings.recordingNoteEnabled,
-            control: {
-              type: "dropdown",
-              key: "recordingNoteFolderMode",
-              options: { root: "Vault root", attachments: "Obsidian attachments folder", custom: "Custom folder" }
-            }
-          },
-          {
-            name: "Recording note folder",
-            desc: "Vault-relative folder used for the temporary recording note.",
-            visible: () => this.plugin.settings.recordingNoteEnabled && this.plugin.settings.recordingNoteFolderMode === "custom",
-            control: { type: "text", key: "recordingNoteFolder", placeholder: "Recordings" }
-          },
-          {
-            name: "Recording note behavior",
-            desc: "Reuse preserves the note. Delete and recreate replaces it when the next recording starts.",
-            visible: () => this.plugin.settings.recordingNoteEnabled,
-            control: { type: "dropdown", key: "recordingNoteBehavior", options: { reuse: "Reuse existing note", recreate: "Delete and recreate" } }
-          },
-          {
-            name: "Sync warning",
-            desc: "Frequent file deletion and creation may cause unnecessary activity or conflicts with fast synchronization tools.",
-            visible: () => this.plugin.settings.recordingNoteEnabled && this.plugin.settings.recordingNoteBehavior === "recreate"
-          },
-          {
-            name: "Recording start delay",
-            desc: "Milliseconds to wait after the microphone opens before capture begins.",
-            control: { type: "slider", key: "startDelayMs", min: 0, max: 2e3, step: 100 }
-          }
-        ]
-      },
-      {
-        type: "group",
-        heading: "Audio files",
-        items: [
-          {
-            name: "Audio save location",
-            desc: "Choose where recorded audio files are written.",
-            control: { type: "dropdown", key: "saveLocation", options: { "audio-folder": "Separate audio folder", attachments: "Obsidian attachments folder", root: "Vault root" } }
-          },
-          {
-            name: "Audio folder",
-            desc: "Used when save location is set to a separate audio folder.",
-            visible: () => this.plugin.settings.saveLocation === "audio-folder",
-            control: { type: "text", key: "audioFolder" }
-          },
-          { name: "Audio filename", render: (setting) => this.renderTemplateSetting(setting, this.audioTemplateOptions()) }
-        ]
-      },
-      {
-        type: "group",
-        heading: "Transcription notes",
-        items: [
-          {
-            name: "Note save location",
-            desc: "Choose where transcription notes are created.",
-            control: { type: "dropdown", key: "noteFolderMode", options: { root: "Vault root", attachments: "Obsidian attachments folder", custom: "Separate folder" } }
-          },
-          {
-            name: "Note folder",
-            desc: "Used when note save location is set to a separate folder.",
-            visible: () => this.plugin.settings.noteFolderMode === "custom",
-            control: { type: "text", key: "noteFolder", placeholder: "transcriptions" }
-          },
-          { name: "Transcription note filename", render: (setting) => this.renderTemplateSetting(setting, this.noteTemplateOptions()) },
-          {
-            name: "Use note template",
-            desc: "When off, notes contain only transcript text and the embedded audio link.",
-            control: { type: "toggle", key: "useTemplate" }
-          },
-          {
-            name: "Note template file",
-            desc: "Vault path to a Markdown template. Supports transcript, audio, and date/time placeholders.",
-            visible: () => this.plugin.settings.useTemplate,
-            control: { type: "text", key: "noteTemplatePath", placeholder: "Templates/Transcription.md" }
-          }
-        ]
-      },
-      {
-        type: "group",
-        heading: "Transcript processing",
-        items: [
-          {
-            name: "Automatically transcribe pasted media links",
-            desc: "Add a citation-style transcript footnote when a supported media link is pasted.",
-            control: { type: "toggle", key: "autoMediaTranscripts" }
-          },
-          {
-            name: "Clean up transcript with AI",
-            desc: "Fix punctuation, remove filler words, and add paragraph breaks while retaining the original.",
-            control: { type: "toggle", key: "cleanupTranscript" }
-          },
-          {
-            name: "Timestamped segments",
-            desc: "Write timestamped segments linked to their position in the audio file.",
-            control: { type: "toggle", key: "segmentedTranscript" }
-          }
-        ]
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    containerEl.createEl("h2", { text: "Transcription service" });
+    this.renderApiKeySetting(new import_obsidian2.Setting(containerEl).setName("Groq API key"));
+    new import_obsidian2.Setting(containerEl).setName("Groq model").setDesc("Turbo is the default for fastest transcription.").addDropdown((dropdown) => {
+      for (const model of GROQ_MODELS) dropdown.addOption(model.id, model.name);
+      dropdown.setValue(this.plugin.settings.model).onChange(async (value) => {
+        this.plugin.settings.model = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    containerEl.createEl("h2", { text: "Recording" });
+    new import_obsidian2.Setting(containerEl).setName("Live recording note").setDesc("Open a temporary Recording... note with a live waveform and Stop button while recording.").addToggle((toggle) => toggle.setValue(this.plugin.settings.recordingNoteEnabled).onChange(async (value) => {
+      this.plugin.settings.recordingNoteEnabled = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.recordingNoteEnabled) {
+      new import_obsidian2.Setting(containerEl).setName("Recording note location").setDesc("Choose where Recording....md is stored.").addDropdown((dropdown) => dropdown.addOption("root", "Vault root").addOption("attachments", "Obsidian attachments folder").addOption("custom", "Custom folder").setValue(this.plugin.settings.recordingNoteFolderMode).onChange(async (value) => {
+        this.plugin.settings.recordingNoteFolderMode = value;
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      if (this.plugin.settings.recordingNoteFolderMode === "custom") {
+        new import_obsidian2.Setting(containerEl).setName("Recording note folder").setDesc("Vault-relative folder used for the temporary recording note.").addText((text) => text.setPlaceholder("Recordings").setValue(this.plugin.settings.recordingNoteFolder).onChange(async (value) => {
+          this.plugin.settings.recordingNoteFolder = value;
+          await this.plugin.saveSettings();
+        }));
       }
-    ];
-  }
-  getControlValue(key) {
-    return this.plugin.settings[key];
-  }
-  async setControlValue(key, value) {
-    const settings = this.plugin.settings;
-    if (!(key in settings)) return;
-    settings[key] = key === "noteTemplatePath" && typeof value === "string" ? (0, import_obsidian2.normalizePath)(value.trim()) : value;
-    await this.plugin.saveSettings();
-    if (["recordingNoteEnabled", "recordingNoteFolderMode", "recordingNoteBehavior", "saveLocation", "noteFolderMode", "useTemplate"].includes(key)) {
-      this.update();
+      new import_obsidian2.Setting(containerEl).setName("Recording note behavior").setDesc("Reuse preserves the note. Delete and recreate replaces it when the next recording starts.").addDropdown((dropdown) => dropdown.addOption("reuse", "Reuse existing note").addOption("recreate", "Delete and recreate").setValue(this.plugin.settings.recordingNoteBehavior).onChange(async (value) => {
+        this.plugin.settings.recordingNoteBehavior = value;
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      if (this.plugin.settings.recordingNoteBehavior === "recreate") {
+        new import_obsidian2.Setting(containerEl).setName("Sync warning").setDesc("Frequent file deletion and creation may cause unnecessary activity or conflicts with fast synchronization tools.");
+      }
     }
+    new import_obsidian2.Setting(containerEl).setName("Recording start delay").setDesc("Milliseconds to wait after the microphone opens before capture begins.").addSlider((slider) => slider.setLimits(0, 2e3, 100).setValue(this.plugin.settings.startDelayMs).onChange(async (value) => {
+      this.plugin.settings.startDelayMs = value;
+      await this.plugin.saveSettings();
+    }));
+    containerEl.createEl("h2", { text: "Audio files" });
+    new import_obsidian2.Setting(containerEl).setName("Audio save location").setDesc("Choose where recorded audio files are written.").addDropdown((dropdown) => dropdown.addOption("audio-folder", "Separate audio folder").addOption("attachments", "Obsidian attachments folder").addOption("root", "Vault root").setValue(this.plugin.settings.saveLocation).onChange(async (value) => {
+      this.plugin.settings.saveLocation = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.saveLocation === "audio-folder") {
+      new import_obsidian2.Setting(containerEl).setName("Audio folder").setDesc("Used for recorded audio files.").addText((text) => text.setValue(this.plugin.settings.audioFolder).onChange(async (value) => {
+        this.plugin.settings.audioFolder = value;
+        await this.plugin.saveSettings();
+      }));
+    }
+    this.renderTemplateSetting(new import_obsidian2.Setting(containerEl).setName("Audio filename"), {
+      desc: "Use date and time placeholders such as {{date}}, {{time}}, {{year}}, and {{second}}.",
+      exampleExtension: ".m4a",
+      fallback: DEFAULT_SETTINGS.audioNameTemplate,
+      getValue: () => this.plugin.settings.audioNameTemplate,
+      setValue: (value) => {
+        this.plugin.settings.audioNameTemplate = value;
+      }
+    });
+    containerEl.createEl("h2", { text: "Transcription notes" });
+    new import_obsidian2.Setting(containerEl).setName("Note save location").setDesc("Choose where transcription notes are created.").addDropdown((dropdown) => dropdown.addOption("root", "Vault root").addOption("attachments", "Obsidian attachments folder").addOption("custom", "Separate folder").setValue(this.plugin.settings.noteFolderMode).onChange(async (value) => {
+      this.plugin.settings.noteFolderMode = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.noteFolderMode === "custom") {
+      new import_obsidian2.Setting(containerEl).setName("Note folder").setDesc("Used for transcription notes.").addText((text) => text.setPlaceholder("transcriptions").setValue(this.plugin.settings.noteFolder).onChange(async (value) => {
+        this.plugin.settings.noteFolder = value;
+        await this.plugin.saveSettings();
+      }));
+    }
+    this.renderTemplateSetting(new import_obsidian2.Setting(containerEl).setName("Transcription note filename"), {
+      desc: "Uses the same filename placeholders as audio files.",
+      exampleExtension: ".md",
+      fallback: DEFAULT_SETTINGS.noteNameTemplate,
+      getValue: () => this.plugin.settings.noteNameTemplate,
+      setValue: (value) => {
+        this.plugin.settings.noteNameTemplate = value;
+      }
+    });
+    new import_obsidian2.Setting(containerEl).setName("Use note template").setDesc("When off, notes contain only transcript text and the embedded audio link.").addToggle((toggle) => toggle.setValue(this.plugin.settings.useTemplate).onChange(async (value) => {
+      this.plugin.settings.useTemplate = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.useTemplate) {
+      new import_obsidian2.Setting(containerEl).setName("Note template file").setDesc("Vault path to a Markdown template. Supports transcript, audio, and date/time placeholders.").addText((text) => text.setPlaceholder("Templates/Transcription.md").setValue(this.plugin.settings.noteTemplatePath).onChange(async (value) => {
+        this.plugin.settings.noteTemplatePath = value.trim() ? (0, import_obsidian2.normalizePath)(value.trim()) : "";
+        await this.plugin.saveSettings();
+      }));
+    }
+    containerEl.createEl("h2", { text: "Transcript processing" });
+    this.renderToggle("Automatically transcribe pasted media links", "Add a citation-style transcript footnote when a supported media link is pasted.", "autoMediaTranscripts");
+    this.renderToggle("Clean up transcript with AI", "Fix punctuation, remove filler words, and add paragraph breaks while retaining the original.", "cleanupTranscript");
+    this.renderToggle("Timestamped segments", "Write timestamped segments linked to their position in the audio file.", "segmentedTranscript");
+  }
+  renderToggle(name, desc, key) {
+    new import_obsidian2.Setting(this.containerEl).setName(name).setDesc(desc).addToggle((toggle) => toggle.setValue(this.plugin.settings[key]).onChange(async (value) => {
+      this.plugin.settings[key] = value;
+      await this.plugin.saveSettings();
+    }));
   }
   renderApiKeySetting(setting) {
     const hasApiKey = Boolean(this.plugin.getApiKey());
@@ -297,32 +265,8 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
       });
     }).addButton((button) => button.setButtonText("Clear").setDisabled(!hasApiKey).onClick(() => {
       this.plugin.setApiKey("");
-      this.update();
+      this.display();
     }));
-  }
-  audioTemplateOptions() {
-    return {
-      name: "Audio filename",
-      desc: "Use date and time placeholders such as {{date}}, {{time}}, {{year}}, and {{second}}.",
-      exampleExtension: ".m4a",
-      fallback: DEFAULT_SETTINGS.audioNameTemplate,
-      getValue: () => this.plugin.settings.audioNameTemplate,
-      setValue: (value) => {
-        this.plugin.settings.audioNameTemplate = value;
-      }
-    };
-  }
-  noteTemplateOptions() {
-    return {
-      name: "Transcription note filename",
-      desc: "Uses the same filename placeholders as audio files.",
-      exampleExtension: ".md",
-      fallback: DEFAULT_SETTINGS.noteNameTemplate,
-      getValue: () => this.plugin.settings.noteNameTemplate,
-      setValue: (value) => {
-        this.plugin.settings.noteNameTemplate = value;
-      }
-    };
   }
   renderTemplateSetting(setting, options) {
     setting.setDesc(options.desc);

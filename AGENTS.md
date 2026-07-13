@@ -91,10 +91,13 @@ resolved in later releases.
 
 ### Findings and prevention rules
 
-- **Minimum Obsidian version:** Declarative settings APIs including
-  `SettingTab.update()` require Obsidian 1.13.0. Keep `manifest.json` and the
-  corresponding `versions.json` entry at `1.13.0` or newer while these APIs are
-  used (error in `0.3.4`, `src/settings.ts:211,229`).
+- **Desktop compatibility floor:** The current public desktop installer ships
+  Obsidian 1.12.7. Keep `minAppVersion` at `1.12.0` and implement settings with
+  the imperative `PluginSettingTab.display()` API until the public installer
+  moves to 1.13 or newer. Do not use 1.13-only settings APIs such as
+  `getSettingDefinitions()` or `SettingTab.update()` while supporting 1.12.
+  Release `0.3.5` passed automated review but rendered a blank settings page on
+  Obsidian 1.12.7 with `TypeError: e.display is not a function`.
 - **Respect deletion preferences:** Use `app.fileManager.trashFile()` rather
   than `vault.delete()` so note recreation follows the user's configured trash
   preference (warning in `0.3.4`, `src/main.ts:394`).
