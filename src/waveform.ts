@@ -60,16 +60,11 @@ export class WaveformView {
     ctx.clearRect(0, 0, width, height);
 
     const analyser = this.getAnalyser();
-    const stroke = this.strokeColor();
-    ctx.lineWidth = Math.max(1, Math.floor(height / 12));
-    ctx.strokeStyle = stroke;
-    ctx.beginPath();
+    ctx.fillStyle = this.strokeColor();
 
     if (!analyser) {
       // No signal (not recording, or AudioContext unavailable): flat midline.
-      ctx.moveTo(0, height / 2);
-      ctx.lineTo(width, height / 2);
-      ctx.stroke();
+      ctx.fillRect(0, Math.floor(height / 2), width, Math.max(1, Math.floor(height / 12)));
       return;
     }
 
@@ -80,19 +75,19 @@ export class WaveformView {
     const data = this.data;
     analyser.getByteTimeDomainData(data);
 
-    const step = width / bins;
-    for (let index = 0; index < bins; index += 1) {
-      // Samples are 0..255 centered on 128; map to canvas height.
-      const value = data[index] / 255;
-      const y = value * height;
-      const x = index * step;
-      if (index === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
+    const barCount = Math.max(12, Math.min(48, Math.floor(width / 6)));
+    const gap = Math.max(1, Math.floor(width / barCount / 4));
+    const barWidth = Math.max(1, width / barCount - gap);
+    const samplesPerBar = Math.max(1, Math.floor(bins / barCount));
+    for (let bar = 0; bar < barCount; bar += 1) {
+      let peak = 0;
+      const start = bar * samplesPerBar;
+      for (let index = start; index < Math.min(bins, start + samplesPerBar); index += 1) {
+        peak = Math.max(peak, Math.abs(data[index] - 128) / 128);
       }
+      const barHeight = Math.max(2, peak * height);
+      ctx.fillRect(bar * (barWidth + gap), (height - barHeight) / 2, barWidth, barHeight);
     }
-    ctx.stroke();
   }
 
   /** Match the backing store to the element's CSS size (crisp on HiDPI). */
