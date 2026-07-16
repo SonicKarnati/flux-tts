@@ -1,7 +1,7 @@
 {
   "id": "flux-tts",
   "name": "Flux TTS",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "minAppVersion": "1.12.0",
   "description": "Record audio from the ribbon, save it to your vault, and create Groq-powered transcription notes.",
   "author": "smbp",

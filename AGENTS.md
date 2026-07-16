@@ -64,6 +64,7 @@ resolved in later releases.
 
 | Date | Version | Commit | Result |
 |---|---:|---|---|
+| Jul 13, 2026 | 0.3.6 | `ee3702c` | Failed |
 | Jul 13, 2026 | 0.3.5 | `901cbb7` | Completed |
 | Jul 13, 2026 | 0.3.4 | `071d8da` | Failed |
 | Jul 11, 2026 | 0.3.3 | `7b27556` | Completed |
@@ -83,7 +84,7 @@ resolved in later releases.
 
 ### Release provenance
 
-- Versions `0.3.5`, `0.3.4`, `0.3.3`, and `0.3.2` passed verified GitHub artifact attestations for
+- Versions `0.3.6`, `0.3.5`, `0.3.4`, `0.3.3`, and `0.3.2` passed verified GitHub artifact attestations for
   both `main.js` and `styles.css`.
 - Versions `0.3.0` and `0.2.1` were flagged for missing attestations for those
   assets. Keep the GitHub Actions provenance-attestation step intact and verify
@@ -98,6 +99,15 @@ resolved in later releases.
   `getSettingDefinitions()` or `SettingTab.update()` while supporting 1.12.
   Release `0.3.5` passed automated review but rendered a blank settings page on
   Obsidian 1.12.7 with `TypeError: e.display is not a function`.
+- **Settings headings:** Create headings with
+  `new Setting(containerEl).setName(...).setHeading()` rather than raw HTML
+  heading elements (error in `0.3.6`, `src/settings.ts:76,89,147,176,222`).
+- **Settings compatibility exception:** The scanner recommends
+  `getSettingDefinitions()` because `display()` is deprecated in Obsidian
+  1.13. Continue using `display()` while Obsidian 1.12.7 is the public desktop
+  release; this recommendation is non-blocking and conflicts with the required
+  1.12 compatibility floor (recommendations in `0.3.6`,
+  `src/settings.ts:96,110,131,159,188,210,250`).
 - **Respect deletion preferences:** Use `app.fileManager.trashFile()` rather
   than `vault.delete()` so note recreation follows the user's configured trash
   preference (warning in `0.3.4`, `src/main.ts:394`).
@@ -114,9 +124,9 @@ resolved in later releases.
 - **Regular expressions:** Do not escape characters unnecessarily; in
   particular, avoid `\\[` outside a context where it is required (finding in
   `0.3.3`, `src/main.ts:267`).
-- **Settings UI:** Continue using `getSettingDefinitions()`; do not introduce
-  the deprecated `display` API (findings in `0.3.3` at lines 116, 152, 181, 271;
-  `0.3.2` at lines 115, 151, 180, 258). Do not use deprecated
+- **Settings UI:** Historical reviews recommended `getSettingDefinitions()`
+  (findings in `0.3.3` and `0.3.2`), but do not adopt it until the compatibility
+  floor moves to Obsidian 1.13. Do not use deprecated
   `setDynamicTooltip`; slider values are shown inline (finding in `0.3.2`,
   `src/settings.ts:95`).
 - **Dependencies:** Do not add `builtin-modules`; use a maintained alternative
@@ -132,7 +142,7 @@ confirm that both release assets have GitHub artifact attestations.
 | Path | Purpose |
 |---|---|
 | `src/main.ts` | Plugin entry point. Extends `Plugin`, registers ribbon/commands/settings. Orchestrates record → transcribe → save flow. |
-| `src/settings.ts` | Types, defaults, declarative settings tab UI with switch-based getter/setter. |
+| `src/settings.ts` | Types, defaults, and the Obsidian 1.12-compatible imperative settings tab UI. |
 | `src/recording.ts` | `RecorderController` — `MediaRecorder` lifecycle, MIME negotiation, silence detection, device-change monitor. |
 | `src/transcription.ts` | Groq API client (Whisper + Llama cleanup). Multipart form-data builder, segmented transcript rendering. |
 | `src/templates.ts` | `{{placeholder}}` template engine, validation, filename/folder sanitization. |
@@ -148,7 +158,7 @@ confirm that both release assets have GitHub artifact attestations.
 - **Platform**: `Platform.isMobile` for waveform placement (status bar vs floating pill)
 - **Settings API key**: stored in Obsidian's secret storage (`app.secretStorage`), not in `data.json`
 - **No barrel/index re-exports**; one class or function group per file
-- **Settings UI**: declarative `SettingDefinitionItem[]` with switch-based getter/setter that auto-re-renders on visibility-trigger keys
+- **Settings UI**: imperative `PluginSettingTab.display()` for Obsidian 1.12 compatibility; re-render after visibility-triggering changes
 - **Templates**: custom `{{placeholder}}` regex engine; `validateTemplate` checks unknown keys and unbalanced braces
 - **No third-party runtime deps** — only devDeps (`esbuild`, `typescript`, `obsidian`, `@types/node`)
 - **Files**: `kebab-case.ts`, PascalCase classes/interfaces, camelCase functions/variables
@@ -157,4 +167,4 @@ confirm that both release assets have GitHub artifact attestations.
 
 - **Plugin lifecycle**: `onload()` is async, sets up everything; `onunload()` tears down recorder, waveform, floating DOM
 - **Inline transcription**: `InlineSession` tracks editor + unique placeholder `<transcribing... flux-XXXX>` + footnote id
-- **Declarative settings**: `getSettingDefinitions()` returns array of typed controls with `visible` predicates for conditional rendering
+- **Settings compatibility**: use `display()` and `Setting(...).setHeading()` until the public desktop release supports the declarative settings API

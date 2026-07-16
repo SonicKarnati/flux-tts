@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, Notice, Platform, Plugin, TFile, WorkspaceLeaf, normalizePath, setIcon } from "obsidian";
+import { Editor, MarkdownView, Notice, Platform, Plugin, TFile, normalizePath, setIcon } from "obsidian";
 import { DEFAULT_SETTINGS, FluxTtsSettingTab, FluxTtsSettings, GROQ_MODELS } from "./settings";
 import { RecorderController, RecorderState, RecordingResult } from "./recording";
 import { WaveformView } from "./waveform";
@@ -11,10 +11,8 @@ import {
 } from "./transcription";
 import {
   createNoteUnique,
-  ensureParentFolder,
   resolveAudioPath,
   resolveNotePath,
-  resolveRecordingNotePath,
   writeBinaryUnique
 } from "./paths";
 import {
@@ -25,7 +23,7 @@ import {
   validateTemplate
 } from "./templates";
 import { extractMediaUrl, fetchMediaTranscript } from "./media";
-import { RetryBlockData, createRetryBlock, parseRetryBlock, recordingAction } from "./recording-ui-state";
+import { RetryBlockData, createRetryBlock, findRetryBlock, parseRetryBlock, recordingAction } from "./recording-ui-state";
 
 const PLUGIN_ID = "flux-tts";
 const SECRET_KEY = `${PLUGIN_ID}-groq-api-key`;
@@ -76,11 +74,6 @@ export default class FluxTtsPlugin extends Plugin {
   waveform: WaveformView | null = null;
   private waveformFloatEl: HTMLElement | null = null;
   private inlineSession: InlineSession | null = null;
-  private recordingNoteLeaf: WorkspaceLeaf | null = null;
-  private recordingNoteUi: HTMLElement | null = null;
-  private recordingNoteWaveform: WaveformView | null = null;
-  private recordingStateEl: HTMLElement | null = null;
-  private recordingResumeButton: HTMLButtonElement | null = null;
   private pausedForBackground = false;
 
   async onload(): Promise<void> {
@@ -176,6 +169,12 @@ export default class FluxTtsPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "retry-current-note-transcription",
+      name: "Retry current note transcription",
+      callback: () => void this.retryCurrentNoteTranscription()
+    });
+
     this.addSettingTab(new FluxTtsSettingTab(this.app, this));
     this.registerMarkdownCodeBlockProcessor("flux-tts-retry", (source, element, context) => {
       this.renderRetryBlock(source, element, context.sourcePath);
@@ -217,7 +216,6 @@ export default class FluxTtsPlugin extends Plugin {
     this.waveform = null;
     this.waveformFloatEl?.remove();
     this.waveformFloatEl = null;
-    this.closeRecordingNote();
   }
 
   /**
@@ -271,7 +269,6 @@ export default class FluxTtsPlugin extends Plugin {
     const stringKeys = [
       "audioFolder",
       "noteFolder",
-      "recordingNoteFolder",
       "audioNameTemplate",
       "noteNameTemplate",
       "noteTemplatePath"
@@ -295,13 +292,6 @@ export default class FluxTtsPlugin extends Plugin {
     this.settings.cleanupTranscript = Boolean(this.settings.cleanupTranscript);
     this.settings.segmentedTranscript = Boolean(this.settings.segmentedTranscript);
     this.settings.autoMediaTranscripts = Boolean(this.settings.autoMediaTranscripts);
-    this.settings.recordingNoteEnabled = Boolean(this.settings.recordingNoteEnabled);
-    if (!["root", "attachments", "custom"].includes(this.settings.recordingNoteFolderMode)) {
-      this.settings.recordingNoteFolderMode = DEFAULT_SETTINGS.recordingNoteFolderMode;
-    }
-    if (!["reuse", "recreate"].includes(this.settings.recordingNoteBehavior)) {
-      this.settings.recordingNoteBehavior = DEFAULT_SETTINGS.recordingNoteBehavior;
-    }
   }
 
   private async insertMediaTranscript(editor: Editor, footnoteId: string, mediaUrl: string): Promise<void> {
@@ -360,15 +350,11 @@ export default class FluxTtsPlugin extends Plugin {
     }
 
     try {
-      if (this.settings.recordingNoteEnabled && !this.inlineSession) {
-        await this.openRecordingNote();
-      }
       await this.recorder.start(this.settings.startDelayMs);
       if (this.recorder.isRecording) {
         new Notice("Recording started.");
       }
     } catch (error: unknown) {
-      this.closeRecordingNote();
       console.error(error);
       new Notice(`Could not start recording: ${getErrorMessage(error)}`);
     }
@@ -380,77 +366,15 @@ export default class FluxTtsPlugin extends Plugin {
     }
     const wasRecording = this.recorder.isRecording;
     this.recorder.stop();
-    this.closeRecordingNote();
     if (wasRecording) {
       new Notice("Saving and transcribing...");
     }
   }
 
-  private async openRecordingNote(): Promise<void> {
-    const path = resolveRecordingNotePath(this.app, this.settings);
-    await ensureParentFolder(this.app, path);
-    let file = this.app.vault.getAbstractFileByPath(path);
-    if (file instanceof TFile && this.settings.recordingNoteBehavior === "recreate") {
-      await this.app.fileManager.trashFile(file);
-      file = null;
-    }
-    if (!(file instanceof TFile)) {
-      file = await this.app.vault.create(path, "# Recording...\n");
-    }
-    if (!(file instanceof TFile)) throw new Error(`Could not open ${path}.`);
-
-    const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.openFile(file);
-    this.recordingNoteLeaf = leaf;
-    const view = leaf.view;
-    if (!(view instanceof MarkdownView)) return;
-
-    const ui = view.contentEl.createDiv({ cls: "flux-tts-recording-note" });
-    const waveformHost = ui.createDiv({ cls: "flux-tts-recording-note-waveform" });
-    this.recordingNoteWaveform = new WaveformView(waveformHost, () => this.recorder?.getAnalyser() ?? null);
-    this.recordingStateEl = ui.createDiv({ cls: "flux-tts-recording-state", text: "Starting microphone…" });
-    const actions = ui.createDiv({ cls: "flux-tts-recording-actions" });
-    this.recordingResumeButton = actions.createEl("button", { text: "Resume", cls: "mod-cta" });
-    this.recordingResumeButton.hide();
-    this.recordingResumeButton.addEventListener("click", () => void this.recorder?.resume());
-    const stopButton = actions.createEl("button", { text: "Stop" });
-    stopButton.addEventListener("click", () => this.stopRecording());
-    this.recordingNoteUi = ui;
-  }
-
-  private closeRecordingNote(): void {
-    this.recordingNoteWaveform?.dispose();
-    this.recordingNoteWaveform = null;
-    this.recordingNoteUi?.remove();
-    this.recordingNoteUi = null;
-    this.recordingStateEl = null;
-    this.recordingResumeButton = null;
-    this.recordingNoteLeaf?.detach();
-    this.recordingNoteLeaf = null;
-  }
-
   private handleRecorderState(state: RecorderState, message?: string): void {
     const action = recordingAction(state);
     this.updateRibbonState(action.active, action.label, action.icon);
-    if (state === "recording") this.recordingNoteWaveform?.start();
-    else this.recordingNoteWaveform?.stop();
-
-    if (this.recordingStateEl) {
-      const fallback: Record<RecorderState, string> = {
-        idle: "Stopped",
-        starting: "Starting microphone…",
-        recording: "Recording",
-        paused: "Paused",
-        recovering: "Restoring microphone access…",
-        error: "Microphone unavailable"
-      };
-      this.recordingStateEl.setText(message || fallback[state]);
-    }
-    if (this.recordingResumeButton) {
-      this.recordingResumeButton.toggle(state === "paused" || state === "error");
-    }
     if (message && state === "error") new Notice(message);
-    if (state === "idle") this.closeRecordingNote();
   }
 
   async toggleInlineRecording(): Promise<void> {
@@ -725,6 +649,28 @@ export default class FluxTtsPlugin extends Plugin {
         new Notice(`Retry failed: ${getErrorMessage(error)}`);
       });
     });
+  }
+
+  private async retryCurrentNoteTranscription(): Promise<void> {
+    const note = this.app.workspace.getActiveFile();
+    if (!(note instanceof TFile) || note.extension !== "md") {
+      new Notice("Open a transcript note with a failed transcription first.");
+      return;
+    }
+
+    const content = await this.app.vault.read(note);
+    const retry = findRetryBlock(content);
+    if (!retry) {
+      new Notice("This note has no failed transcription to retry.");
+      return;
+    }
+
+    try {
+      await this.retryTranscription(note.path, retry.source, retry.data);
+    } catch (error: unknown) {
+      console.error(error);
+      new Notice(`Retry failed: ${getErrorMessage(error)}`);
+    }
   }
 
   private async retryTranscription(notePath: string, blockSource: string, data: RetryBlockData): Promise<void> {

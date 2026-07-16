@@ -30,3 +30,19 @@ export function parseRetryBlock(source: string): RetryBlockData {
     message: typeof parsed.message === "string" && parsed.message ? parsed.message : "Transcription failed."
   };
 }
+
+export interface FoundRetryBlock {
+  block: string;
+  source: string;
+  data: RetryBlockData;
+}
+
+export function findRetryBlock(content: string): FoundRetryBlock | null {
+  const match = /```flux-tts-retry\n([\s\S]*?)\n```/.exec(content);
+  if (!match) return null;
+  try {
+    return { block: match[0], source: match[1], data: parseRetryBlock(match[1]) };
+  } catch {
+    return null;
+  }
+}

@@ -128,11 +128,7 @@ var DEFAULT_SETTINGS = {
   startDelayMs: 0,
   cleanupTranscript: false,
   segmentedTranscript: false,
-  autoMediaTranscripts: false,
-  recordingNoteEnabled: true,
-  recordingNoteFolderMode: "root",
-  recordingNoteFolder: "",
-  recordingNoteBehavior: "reuse"
+  autoMediaTranscripts: false
 };
 var API_KEY_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
@@ -143,7 +139,7 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Transcription service" });
+    new import_obsidian2.Setting(containerEl).setName("Transcription service").setHeading();
     this.renderApiKeySetting(new import_obsidian2.Setting(containerEl).setName("Groq API key"));
     new import_obsidian2.Setting(containerEl).setName("Groq model").setDesc("Turbo is the default for fastest transcription.").addDropdown((dropdown) => {
       for (const model of GROQ_MODELS) dropdown.addOption(model.id, model.name);
@@ -152,38 +148,12 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    containerEl.createEl("h2", { text: "Recording" });
-    new import_obsidian2.Setting(containerEl).setName("Live recording note").setDesc("Open a temporary Recording... note with a live waveform and Stop button while recording.").addToggle((toggle) => toggle.setValue(this.plugin.settings.recordingNoteEnabled).onChange(async (value) => {
-      this.plugin.settings.recordingNoteEnabled = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (this.plugin.settings.recordingNoteEnabled) {
-      new import_obsidian2.Setting(containerEl).setName("Recording note location").setDesc("Choose where Recording....md is stored.").addDropdown((dropdown) => dropdown.addOption("root", "Vault root").addOption("attachments", "Obsidian attachments folder").addOption("custom", "Custom folder").setValue(this.plugin.settings.recordingNoteFolderMode).onChange(async (value) => {
-        this.plugin.settings.recordingNoteFolderMode = value;
-        await this.plugin.saveSettings();
-        this.display();
-      }));
-      if (this.plugin.settings.recordingNoteFolderMode === "custom") {
-        new import_obsidian2.Setting(containerEl).setName("Recording note folder").setDesc("Vault-relative folder used for the temporary recording note.").addText((text) => text.setPlaceholder("Recordings").setValue(this.plugin.settings.recordingNoteFolder).onChange(async (value) => {
-          this.plugin.settings.recordingNoteFolder = value;
-          await this.plugin.saveSettings();
-        }));
-      }
-      new import_obsidian2.Setting(containerEl).setName("Recording note behavior").setDesc("Reuse preserves the note. Delete and recreate replaces it when the next recording starts.").addDropdown((dropdown) => dropdown.addOption("reuse", "Reuse existing note").addOption("recreate", "Delete and recreate").setValue(this.plugin.settings.recordingNoteBehavior).onChange(async (value) => {
-        this.plugin.settings.recordingNoteBehavior = value;
-        await this.plugin.saveSettings();
-        this.display();
-      }));
-      if (this.plugin.settings.recordingNoteBehavior === "recreate") {
-        new import_obsidian2.Setting(containerEl).setName("Sync warning").setDesc("Frequent file deletion and creation may cause unnecessary activity or conflicts with fast synchronization tools.");
-      }
-    }
+    new import_obsidian2.Setting(containerEl).setName("Recording").setHeading();
     new import_obsidian2.Setting(containerEl).setName("Recording start delay").setDesc("Milliseconds to wait after the microphone opens before capture begins.").addSlider((slider) => slider.setLimits(0, 2e3, 100).setValue(this.plugin.settings.startDelayMs).onChange(async (value) => {
       this.plugin.settings.startDelayMs = value;
       await this.plugin.saveSettings();
     }));
-    containerEl.createEl("h2", { text: "Audio files" });
+    new import_obsidian2.Setting(containerEl).setName("Audio files").setHeading();
     new import_obsidian2.Setting(containerEl).setName("Audio save location").setDesc("Choose where recorded audio files are written.").addDropdown((dropdown) => dropdown.addOption("audio-folder", "Separate audio folder").addOption("attachments", "Obsidian attachments folder").addOption("root", "Vault root").setValue(this.plugin.settings.saveLocation).onChange(async (value) => {
       this.plugin.settings.saveLocation = value;
       await this.plugin.saveSettings();
@@ -204,7 +174,7 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
         this.plugin.settings.audioNameTemplate = value;
       }
     });
-    containerEl.createEl("h2", { text: "Transcription notes" });
+    new import_obsidian2.Setting(containerEl).setName("Transcription notes").setHeading();
     new import_obsidian2.Setting(containerEl).setName("Note save location").setDesc("Choose where transcription notes are created.").addDropdown((dropdown) => dropdown.addOption("root", "Vault root").addOption("attachments", "Obsidian attachments folder").addOption("custom", "Separate folder").setValue(this.plugin.settings.noteFolderMode).onChange(async (value) => {
       this.plugin.settings.noteFolderMode = value;
       await this.plugin.saveSettings();
@@ -236,7 +206,7 @@ var FluxTtsSettingTab = class extends import_obsidian2.PluginSettingTab {
         await this.plugin.saveSettings();
       }));
     }
-    containerEl.createEl("h2", { text: "Transcript processing" });
+    new import_obsidian2.Setting(containerEl).setName("Transcript processing").setHeading();
     this.renderToggle("Automatically transcribe pasted media links", "Add a citation-style transcript footnote when a supported media link is pasted.", "autoMediaTranscripts");
     this.renderToggle("Clean up transcript with AI", "Fix punctuation, remove filler words, and add paragraph breaks while retaining the original.", "cleanupTranscript");
     this.renderToggle("Timestamped segments", "Write timestamped segments linked to their position in the audio file.", "segmentedTranscript");
@@ -949,19 +919,6 @@ function resolveNotePath(app, settings, fileName) {
   }
   return cleanFileName;
 }
-function resolveRecordingNotePath(app, settings) {
-  const fileName = "Recording....md";
-  if (settings.recordingNoteFolderMode === "attachments") {
-    const folder = getAttachmentFolder(app);
-    if (folder) return (0, import_obsidian5.normalizePath)(`${folder}/${fileName}`);
-    new import_obsidian5.Notice("No Obsidian attachment folder is configured; creating Recording... at the vault root.");
-  }
-  if (settings.recordingNoteFolderMode === "custom") {
-    const folder = sanitizeFolderPath(settings.recordingNoteFolder);
-    if (folder) return (0, import_obsidian5.normalizePath)(`${folder}/${fileName}`);
-  }
-  return fileName;
-}
 async function ensureParentFolder(app, path) {
   const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   if (folder) {
@@ -1156,6 +1113,15 @@ function parseRetryBlock(source) {
     message: typeof parsed.message === "string" && parsed.message ? parsed.message : "Transcription failed."
   };
 }
+function findRetryBlock(content) {
+  const match = /```flux-tts-retry\n([\s\S]*?)\n```/.exec(content);
+  if (!match) return null;
+  try {
+    return { block: match[0], source: match[1], data: parseRetryBlock(match[1]) };
+  } catch (e) {
+    return null;
+  }
+}
 
 // src/main.ts
 var PLUGIN_ID = "flux-tts";
@@ -1180,11 +1146,6 @@ var FluxTtsPlugin = class extends import_obsidian7.Plugin {
     this.waveform = null;
     this.waveformFloatEl = null;
     this.inlineSession = null;
-    this.recordingNoteLeaf = null;
-    this.recordingNoteUi = null;
-    this.recordingNoteWaveform = null;
-    this.recordingStateEl = null;
-    this.recordingResumeButton = null;
     this.pausedForBackground = false;
   }
   async onload() {
@@ -1274,6 +1235,11 @@ var FluxTtsPlugin = class extends import_obsidian7.Plugin {
         this.stopRecording();
       }
     });
+    this.addCommand({
+      id: "retry-current-note-transcription",
+      name: "Retry current note transcription",
+      callback: () => void this.retryCurrentNoteTranscription()
+    });
     this.addSettingTab(new FluxTtsSettingTab(this.app, this));
     this.registerMarkdownCodeBlockProcessor("flux-tts-retry", (source, element, context) => {
       this.renderRetryBlock(source, element, context.sourcePath);
@@ -1317,7 +1283,6 @@ var FluxTtsPlugin = class extends import_obsidian7.Plugin {
     this.waveform = null;
     (_c = this.waveformFloatEl) == null ? void 0 : _c.remove();
     this.waveformFloatEl = null;
-    this.closeRecordingNote();
   }
   /**
    * Create the live-waveform view. Desktop has a status bar to host it; mobile
@@ -1364,7 +1329,6 @@ var FluxTtsPlugin = class extends import_obsidian7.Plugin {
     const stringKeys = [
       "audioFolder",
       "noteFolder",
-      "recordingNoteFolder",
       "audioNameTemplate",
       "noteNameTemplate",
       "noteTemplatePath"
@@ -1385,13 +1349,6 @@ var FluxTtsPlugin = class extends import_obsidian7.Plugin {
     this.settings.cleanupTranscript = Boolean(this.settings.cleanupTranscript);
     this.settings.segmentedTranscript = Boolean(this.settings.segmentedTranscript);
     this.settings.autoMediaTranscripts = Boolean(this.settings.autoMediaTranscripts);
-    this.settings.recordingNoteEnabled = Boolean(this.settings.recordingNoteEnabled);
-    if (!["root", "attachments", "custom"].includes(this.settings.recordingNoteFolderMode)) {
-      this.settings.recordingNoteFolderMode = DEFAULT_SETTINGS.recordingNoteFolderMode;
-    }
-    if (!["reuse", "recreate"].includes(this.settings.recordingNoteBehavior)) {
-      this.settings.recordingNoteBehavior = DEFAULT_SETTINGS.recordingNoteBehavior;
-    }
   }
   async insertMediaTranscript(editor, footnoteId, mediaUrl) {
     new import_obsidian7.Notice("Fetching media transcript\u2026");
@@ -1451,15 +1408,11 @@ var FluxTtsPlugin = class extends import_obsidian7.Plugin {
       return;
     }
     try {
-      if (this.settings.recordingNoteEnabled && !this.inlineSession) {
-        await this.openRecordingNote();
-      }
       await this.recorder.start(this.settings.startDelayMs);
       if (this.recorder.isRecording) {
         new import_obsidian7.Notice("Recording started.");
       }
     } catch (error) {
-      this.closeRecordingNote();
       console.error(error);
       new import_obsidian7.Notice(`Could not start recording: ${getErrorMessage(error)}`);
     }
@@ -1471,79 +1424,14 @@ var FluxTtsPlugin = class extends import_obsidian7.Plugin {
     }
     const wasRecording = this.recorder.isRecording;
     this.recorder.stop();
-    this.closeRecordingNote();
     if (wasRecording) {
       new import_obsidian7.Notice("Saving and transcribing...");
     }
   }
-  async openRecordingNote() {
-    const path = resolveRecordingNotePath(this.app, this.settings);
-    await ensureParentFolder(this.app, path);
-    let file = this.app.vault.getAbstractFileByPath(path);
-    if (file instanceof import_obsidian7.TFile && this.settings.recordingNoteBehavior === "recreate") {
-      await this.app.fileManager.trashFile(file);
-      file = null;
-    }
-    if (!(file instanceof import_obsidian7.TFile)) {
-      file = await this.app.vault.create(path, "# Recording...\n");
-    }
-    if (!(file instanceof import_obsidian7.TFile)) throw new Error(`Could not open ${path}.`);
-    const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.openFile(file);
-    this.recordingNoteLeaf = leaf;
-    const view = leaf.view;
-    if (!(view instanceof import_obsidian7.MarkdownView)) return;
-    const ui = view.contentEl.createDiv({ cls: "flux-tts-recording-note" });
-    const waveformHost = ui.createDiv({ cls: "flux-tts-recording-note-waveform" });
-    this.recordingNoteWaveform = new WaveformView(waveformHost, () => {
-      var _a, _b;
-      return (_b = (_a = this.recorder) == null ? void 0 : _a.getAnalyser()) != null ? _b : null;
-    });
-    this.recordingStateEl = ui.createDiv({ cls: "flux-tts-recording-state", text: "Starting microphone\u2026" });
-    const actions = ui.createDiv({ cls: "flux-tts-recording-actions" });
-    this.recordingResumeButton = actions.createEl("button", { text: "Resume", cls: "mod-cta" });
-    this.recordingResumeButton.hide();
-    this.recordingResumeButton.addEventListener("click", () => {
-      var _a;
-      return void ((_a = this.recorder) == null ? void 0 : _a.resume());
-    });
-    const stopButton = actions.createEl("button", { text: "Stop" });
-    stopButton.addEventListener("click", () => this.stopRecording());
-    this.recordingNoteUi = ui;
-  }
-  closeRecordingNote() {
-    var _a, _b, _c;
-    (_a = this.recordingNoteWaveform) == null ? void 0 : _a.dispose();
-    this.recordingNoteWaveform = null;
-    (_b = this.recordingNoteUi) == null ? void 0 : _b.remove();
-    this.recordingNoteUi = null;
-    this.recordingStateEl = null;
-    this.recordingResumeButton = null;
-    (_c = this.recordingNoteLeaf) == null ? void 0 : _c.detach();
-    this.recordingNoteLeaf = null;
-  }
   handleRecorderState(state, message) {
-    var _a, _b;
     const action = recordingAction(state);
     this.updateRibbonState(action.active, action.label, action.icon);
-    if (state === "recording") (_a = this.recordingNoteWaveform) == null ? void 0 : _a.start();
-    else (_b = this.recordingNoteWaveform) == null ? void 0 : _b.stop();
-    if (this.recordingStateEl) {
-      const fallback = {
-        idle: "Stopped",
-        starting: "Starting microphone\u2026",
-        recording: "Recording",
-        paused: "Paused",
-        recovering: "Restoring microphone access\u2026",
-        error: "Microphone unavailable"
-      };
-      this.recordingStateEl.setText(message || fallback[state]);
-    }
-    if (this.recordingResumeButton) {
-      this.recordingResumeButton.toggle(state === "paused" || state === "error");
-    }
     if (message && state === "error") new import_obsidian7.Notice(message);
-    if (state === "idle") this.closeRecordingNote();
   }
   async toggleInlineRecording() {
     var _a;
@@ -1774,6 +1662,25 @@ ${values.originalTranscript}`;
         new import_obsidian7.Notice(`Retry failed: ${getErrorMessage(error)}`);
       });
     });
+  }
+  async retryCurrentNoteTranscription() {
+    const note = this.app.workspace.getActiveFile();
+    if (!(note instanceof import_obsidian7.TFile) || note.extension !== "md") {
+      new import_obsidian7.Notice("Open a transcript note with a failed transcription first.");
+      return;
+    }
+    const content = await this.app.vault.read(note);
+    const retry = findRetryBlock(content);
+    if (!retry) {
+      new import_obsidian7.Notice("This note has no failed transcription to retry.");
+      return;
+    }
+    try {
+      await this.retryTranscription(note.path, retry.source, retry.data);
+    } catch (error) {
+      console.error(error);
+      new import_obsidian7.Notice(`Retry failed: ${getErrorMessage(error)}`);
+    }
   }
   async retryTranscription(notePath, blockSource, data) {
     const note = this.app.vault.getAbstractFileByPath(notePath);

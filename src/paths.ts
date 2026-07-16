@@ -54,20 +54,6 @@ export function resolveNotePath(app: App, settings: FluxTtsSettings, fileName: s
   return cleanFileName;
 }
 
-export function resolveRecordingNotePath(app: App, settings: FluxTtsSettings): string {
-  const fileName = "Recording....md";
-  if (settings.recordingNoteFolderMode === "attachments") {
-    const folder = getAttachmentFolder(app);
-    if (folder) return normalizePath(`${folder}/${fileName}`);
-    new Notice("No Obsidian attachment folder is configured; creating Recording... at the vault root.");
-  }
-  if (settings.recordingNoteFolderMode === "custom") {
-    const folder = sanitizeFolderPath(settings.recordingNoteFolder);
-    if (folder) return normalizePath(`${folder}/${fileName}`);
-  }
-  return fileName;
-}
-
 export async function ensureParentFolder(app: App, path: string): Promise<void> {
   const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   if (folder) {
