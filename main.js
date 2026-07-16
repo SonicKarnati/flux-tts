@@ -969,6 +969,32 @@ async function createNoteUnique(app, path, content) {
 
 // src/media.ts
 var import_obsidian6 = require("obsidian");
+
+// src/youtube-captions.ts
+function parseYouTubeCaptionResponse(text) {
+  var _a;
+  if (!text.trim()) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+  const segments = ((_a = parsed.events) != null ? _a : []).map((event) => {
+    var _a2, _b, _c, _d;
+    return {
+      start: ((_a2 = event.tStartMs) != null ? _a2 : 0) / 1e3,
+      end: (((_b = event.tStartMs) != null ? _b : 0) + ((_c = event.dDurationMs) != null ? _c : 0)) / 1e3,
+      text: ((_d = event.segs) != null ? _d : []).map((segment) => {
+        var _a3;
+        return (_a3 = segment.utf8) != null ? _a3 : "";
+      }).join("").replace(/\s+/g, " ").trim()
+    };
+  }).filter((segment) => segment.text);
+  return segments.length ? segments : null;
+}
+
+// src/media.ts
 var MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 function extractMediaUrl(text) {
   var _a;
@@ -1006,7 +1032,7 @@ async function fetchMediaTranscript(options) {
   return { ...transcription, title: media.title, sourceUrl: options.url };
 }
 async function fetchYouTubeCaptions(url) {
-  var _a, _b;
+  var _a;
   const page = await (0, import_obsidian6.requestUrl)({ url, throw: false });
   if (page.status < 200 || page.status >= 300) throw new Error(`YouTube returned HTTP ${page.status}.`);
   const tracksMatch = page.text.match(/"captionTracks":(\[.*?\]),"audioTracks"/s);
@@ -1021,21 +1047,10 @@ async function fetchYouTubeCaptions(url) {
   if (!(track == null ? void 0 : track.baseUrl)) return null;
   const captionResponse = await (0, import_obsidian6.requestUrl)({ url: `${track.baseUrl}&fmt=json3`, throw: false });
   if (captionResponse.status < 200 || captionResponse.status >= 300) return null;
-  const parsed = captionResponse.json;
-  const segments = ((_a = parsed.events) != null ? _a : []).map((event) => {
-    var _a2, _b2, _c, _d;
-    return {
-      start: ((_a2 = event.tStartMs) != null ? _a2 : 0) / 1e3,
-      end: (((_b2 = event.tStartMs) != null ? _b2 : 0) + ((_c = event.dDurationMs) != null ? _c : 0)) / 1e3,
-      text: ((_d = event.segs) != null ? _d : []).map((segment) => {
-        var _a3;
-        return (_a3 = segment.utf8) != null ? _a3 : "";
-      }).join("").replace(/\s+/g, " ").trim()
-    };
-  }).filter((segment) => segment.text);
-  if (!segments.length) return null;
+  const segments = parseYouTubeCaptionResponse(captionResponse.text);
+  if (!segments) return null;
   const titleMatch = page.text.match(/<title>(.*?)<\/title>/is);
-  const title = decodeHtml(((_b = titleMatch == null ? void 0 : titleMatch[1]) == null ? void 0 : _b.replace(/\s*-\s*YouTube\s*$/, "").trim()) || "YouTube video");
+  const title = decodeHtml(((_a = titleMatch == null ? void 0 : titleMatch[1]) == null ? void 0 : _a.replace(/\s*-\s*YouTube\s*$/, "").trim()) || "YouTube video");
   return { title, sourceUrl: url, text: segments.map((segment) => segment.text).join(" "), segments };
 }
 async function resolveMediaAsset(url) {
