@@ -9,7 +9,6 @@ export const GROQ_MODELS = [
 
 export type AudioSaveLocation = "audio-folder" | "attachments" | "root";
 export type NoteFolderMode = "root" | "attachments" | "custom";
-export type RecordingNoteBehavior = "reuse" | "recreate";
 
 export interface FluxTtsSettings {
   model: string;
@@ -25,10 +24,6 @@ export interface FluxTtsSettings {
   cleanupTranscript: boolean;
   segmentedTranscript: boolean;
   autoMediaTranscripts: boolean;
-  recordingNoteEnabled: boolean;
-  recordingNoteFolderMode: NoteFolderMode;
-  recordingNoteFolder: string;
-  recordingNoteBehavior: RecordingNoteBehavior;
 }
 
 export const DEFAULT_SETTINGS: FluxTtsSettings = {
@@ -44,11 +39,7 @@ export const DEFAULT_SETTINGS: FluxTtsSettings = {
   startDelayMs: 0,
   cleanupTranscript: false,
   segmentedTranscript: false,
-  autoMediaTranscripts: false,
-  recordingNoteEnabled: true,
-  recordingNoteFolderMode: "root",
-  recordingNoteFolder: "",
-  recordingNoteBehavior: "reuse"
+  autoMediaTranscripts: false
 };
 
 const API_KEY_MASK = "••••••••••••";
@@ -73,7 +64,7 @@ export class FluxTtsSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Transcription service" });
+    new Setting(containerEl).setName("Transcription service").setHeading();
     this.renderApiKeySetting(new Setting(containerEl).setName("Groq API key"));
     new Setting(containerEl)
       .setName("Groq model")
@@ -86,56 +77,7 @@ export class FluxTtsSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl("h2", { text: "Recording" });
-    new Setting(containerEl)
-      .setName("Live recording note")
-      .setDesc("Open a temporary Recording... note with a live waveform and Stop button while recording.")
-      .addToggle((toggle) => toggle.setValue(this.plugin.settings.recordingNoteEnabled).onChange(async (value) => {
-        this.plugin.settings.recordingNoteEnabled = value;
-        await this.plugin.saveSettings();
-        this.display();
-      }));
-    if (this.plugin.settings.recordingNoteEnabled) {
-      new Setting(containerEl)
-        .setName("Recording note location")
-        .setDesc("Choose where Recording....md is stored.")
-        .addDropdown((dropdown) => dropdown
-          .addOption("root", "Vault root")
-          .addOption("attachments", "Obsidian attachments folder")
-          .addOption("custom", "Custom folder")
-          .setValue(this.plugin.settings.recordingNoteFolderMode)
-          .onChange(async (value) => {
-            this.plugin.settings.recordingNoteFolderMode = value as NoteFolderMode;
-            await this.plugin.saveSettings();
-            this.display();
-          }));
-      if (this.plugin.settings.recordingNoteFolderMode === "custom") {
-        new Setting(containerEl)
-          .setName("Recording note folder")
-          .setDesc("Vault-relative folder used for the temporary recording note.")
-          .addText((text) => text.setPlaceholder("Recordings").setValue(this.plugin.settings.recordingNoteFolder).onChange(async (value) => {
-            this.plugin.settings.recordingNoteFolder = value;
-            await this.plugin.saveSettings();
-          }));
-      }
-      new Setting(containerEl)
-        .setName("Recording note behavior")
-        .setDesc("Reuse preserves the note. Delete and recreate replaces it when the next recording starts.")
-        .addDropdown((dropdown) => dropdown
-          .addOption("reuse", "Reuse existing note")
-          .addOption("recreate", "Delete and recreate")
-          .setValue(this.plugin.settings.recordingNoteBehavior)
-          .onChange(async (value) => {
-            this.plugin.settings.recordingNoteBehavior = value as RecordingNoteBehavior;
-            await this.plugin.saveSettings();
-            this.display();
-          }));
-      if (this.plugin.settings.recordingNoteBehavior === "recreate") {
-        new Setting(containerEl)
-          .setName("Sync warning")
-          .setDesc("Frequent file deletion and creation may cause unnecessary activity or conflicts with fast synchronization tools.");
-      }
-    }
+    new Setting(containerEl).setName("Recording").setHeading();
     new Setting(containerEl)
       .setName("Recording start delay")
       .setDesc("Milliseconds to wait after the microphone opens before capture begins.")
@@ -144,7 +86,7 @@ export class FluxTtsSettingTab extends PluginSettingTab {
         await this.plugin.saveSettings();
       }));
 
-    containerEl.createEl("h2", { text: "Audio files" });
+    new Setting(containerEl).setName("Audio files").setHeading();
     new Setting(containerEl)
       .setName("Audio save location")
       .setDesc("Choose where recorded audio files are written.")
@@ -173,7 +115,7 @@ export class FluxTtsSettingTab extends PluginSettingTab {
       setValue: (value) => { this.plugin.settings.audioNameTemplate = value; }
     });
 
-    containerEl.createEl("h2", { text: "Transcription notes" });
+    new Setting(containerEl).setName("Transcription notes").setHeading();
     new Setting(containerEl)
       .setName("Note save location")
       .setDesc("Choose where transcription notes are created.")
@@ -219,7 +161,7 @@ export class FluxTtsSettingTab extends PluginSettingTab {
         }));
     }
 
-    containerEl.createEl("h2", { text: "Transcript processing" });
+    new Setting(containerEl).setName("Transcript processing").setHeading();
     this.renderToggle("Automatically transcribe pasted media links", "Add a citation-style transcript footnote when a supported media link is pasted.", "autoMediaTranscripts");
     this.renderToggle("Clean up transcript with AI", "Fix punctuation, remove filler words, and add paragraph breaks while retaining the original.", "cleanupTranscript");
     this.renderToggle("Timestamped segments", "Write timestamped segments linked to their position in the audio file.", "segmentedTranscript");
