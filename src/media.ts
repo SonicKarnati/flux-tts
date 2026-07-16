@@ -1,19 +1,12 @@
 import { requestUrl } from "obsidian";
 import { TranscriptionResult, transcribeAudio } from "./transcription";
+import { parseYouTubeCaptionResponse } from "./youtube-captions";
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 
 interface CaptionTrack {
   baseUrl?: string;
   name?: { simpleText?: string };
-}
-
-interface CaptionResponse {
-  events?: Array<{
-    tStartMs?: number;
-    dDurationMs?: number;
-    segs?: Array<{ utf8?: string }>;
-  }>;
 }
 
 export interface MediaTranscriptResult extends TranscriptionResult {
@@ -82,15 +75,8 @@ async function fetchYouTubeCaptions(url: string): Promise<MediaTranscriptResult 
 
   const captionResponse = await requestUrl({ url: `${track.baseUrl}&fmt=json3`, throw: false });
   if (captionResponse.status < 200 || captionResponse.status >= 300) return null;
-  const parsed = captionResponse.json as CaptionResponse;
-  const segments = (parsed.events ?? [])
-    .map((event) => ({
-      start: (event.tStartMs ?? 0) / 1000,
-      end: ((event.tStartMs ?? 0) + (event.dDurationMs ?? 0)) / 1000,
-      text: (event.segs ?? []).map((segment) => segment.utf8 ?? "").join("").replace(/\s+/g, " ").trim()
-    }))
-    .filter((segment) => segment.text);
-  if (!segments.length) return null;
+  const segments = parseYouTubeCaptionResponse(captionResponse.text);
+  if (!segments) return null;
 
   const titleMatch = page.text.match(/<title>(.*?)<\/title>/is);
   const title = decodeHtml(titleMatch?.[1]?.replace(/\s*-\s*YouTube\s*$/, "").trim() || "YouTube video");

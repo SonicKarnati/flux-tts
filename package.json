@@ -1,6 +1,6 @@
 {
   "name": "flux-tts",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Obsidian plugin that records audio and creates Groq-powered transcription notes.",
   "main": "main.js",
   "scripts": {
